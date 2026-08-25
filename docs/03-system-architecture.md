@@ -18,6 +18,8 @@ No code has been written yet, and no infrastructure account exists. The stack be
 
 If any of these conflict with an existing technical direction, org standard, or vendor relationship, flag it now — the rest of this document, and every downstream doc, assumes this stack.
 
+**Update:** Assumptions 1–4 above are confirmed, per the full head-to-head evaluation in [13-technology-decisions.md](./13-technology-decisions.md). That document also resolves the one hosting question §14 below still leaves open in its "final choice not yet made" wording — see the update note there.
+
 ## 1. System Context
 
 ```mermaid
@@ -162,7 +164,7 @@ PostHog, capturing product usage events (funnel: sign-up → first recording →
 ## 14. Deployment
 
 - **Mobile app:** Expo EAS Build + Submit → TestFlight/App Store and Play Store internal testing tracks initially.
-- **Coordinator API & CV microservice:** containerised, deployed as separate services (e.g. Fly.io or Render — final choice not yet made, low-risk to decide later since both are Docker-based and swappable).
+- **Coordinator API & CV microservice:** containerised, deployed as separate services on **Google Cloud Run** — resolved in [13-technology-decisions.md](./13-technology-decisions.md) §6 (autoscale-to-zero cost fit, first-party MediaPipe/Python tooling alignment). Both services remain plain Docker containers, so this stays a low-risk-to-change deploy target, not an architectural dependency.
 - **Database/Auth/Storage:** Supabase Cloud (managed).
 - **CI/CD:** GitHub Actions — lint + typecheck + test on every PR (see [12-testing.md](./12-testing.md)); deploy on merge to main via environment-gated pipelines (staging → production).
 - **Environments:** local, staging, production — each with its own Supabase project to keep player data out of non-production environments entirely.

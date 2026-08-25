@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+.next/
+.expo/
+coverage/
+package-lock.json
+*.min.js
+
+# Pre-existing hand-authored content, out of scope for this milestone's tooling.
+docs/
+roadmap/
+web/

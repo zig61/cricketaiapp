@@ -27,7 +27,8 @@ None — this is the first milestone.
 - Create Supabase projects for local, staging, and production (§14 of [/docs/03-system-architecture.md](../docs/03-system-architecture.md)); Supabase CLI wired for local development and migrations.
 - GitHub Actions CI: lint, typecheck, unit tests on every PR across all three packages.
 - Secrets handling per [/docs/11-security.md](../docs/11-security.md) §8 — `.env.example` with placeholder keys only, real secrets injected via CI/deployment platform secret storage.
-- Decide and record the final deployment target for the Coordinator API and CV microservice (Fly.io vs Render — open per [/docs/03-system-architecture.md](../docs/03-system-architecture.md) §14).
+- Deployment target for the Coordinator API and CV microservice is already decided — **Google Cloud Run**, per [/docs/13-technology-decisions.md](../docs/13-technology-decisions.md) §6 — this milestone's job is implementing against it (a `Dockerfile` per service, Cloud Run deploy config), not deciding it.
+- Create the free Firebase project required purely for FCM (Android push) credentials, per [/docs/13-technology-decisions.md](../docs/13-technology-decisions.md) §10 — a narrow, unavoidable operational dependency, not a reconsideration of Supabase as the backend platform. Wire the resulting service-account credential into EAS/Expo push config.
 
 ## Acceptance Criteria
 - Fresh clone + install succeeds with no manual steps beyond documented setup.

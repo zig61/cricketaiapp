@@ -1,0 +1,29 @@
+# Supabase CLI config for local development.
+# Hand-authored — re-validate with `supabase init`/`supabase link` once the CLI is installed,
+# since this schema can drift between CLI releases.
+project_id = "cricket-ai"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public"]
+max_rows = 1000
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = []
+jwt_expiry = 3600
+enable_signup = true
+
+[storage]
+enabled = true
