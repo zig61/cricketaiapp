@@ -9,6 +9,24 @@ function isPublicPath(pathname: string): boolean {
 }
 
 export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+  const publicPath = isPublicPath(pathname);
+
+  // Supabase isn't configured yet (no project created / env vars not set in
+  // this deployment) — constructing a client would throw and 500 every
+  // route. Degrade gracefully instead: treat every request as
+  // unauthenticated rather than crashing, so at minimum the public pages
+  // (marketing, login, signup) keep working.
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    if (!publicPath) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.searchParams.set("next", pathname);
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next({ request });
+  }
+
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -36,9 +54,6 @@ export async function proxy(request: NextRequest) {
   // already used in services/coordinator-api.
   const { data } = await supabase.auth.getClaims();
   const isAuthenticated = Boolean(data?.claims);
-
-  const pathname = request.nextUrl.pathname;
-  const publicPath = isPublicPath(pathname);
 
   if (!isAuthenticated && !publicPath) {
     const url = request.nextUrl.clone();
