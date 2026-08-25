@@ -1,3 +1,6 @@
+import Link from "next/link";
+import { Button } from "@/components/ui/Button";
+
 export default function Home() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-zinc-50 px-6 font-sans dark:bg-black">
@@ -9,7 +12,15 @@ export default function Home() {
           AI-powered batting technique coaching. Record your shot, get a
           diagnosis, get a drill.
         </p>
-        <p className="text-sm text-zinc-500 dark:text-zinc-500">
+        <div className="mt-4 flex items-center gap-3">
+          <Link href="/signup">
+            <Button>Get started</Button>
+          </Link>
+          <Link href="/login">
+            <Button variant="secondary">Log in</Button>
+          </Link>
+        </div>
+        <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-500">
           The app is in development — this site will grow alongside it.
         </p>
       </main>

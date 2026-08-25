@@ -1,0 +1,121 @@
+"use client";
+
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
+import { toUserMessage } from "@/lib/errors";
+import { Button } from "@/components/ui/Button";
+
+type Step = "idle" | "requesting" | "uploading" | "confirming" | "done";
+
+function getVideoDuration(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(video.src);
+      resolve(video.duration);
+    };
+    video.onerror = () => reject(new Error("Couldn't read video metadata."));
+    video.src = URL.createObjectURL(file);
+  });
+}
+
+export function UploadForm() {
+  const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [step, setStep] = useState<Step>("idle");
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleFileSelected(file: File) {
+    setError(null);
+
+    if (!/\.(mp4|mov|m4v)$/i.test(file.name)) {
+      setError("Please choose an MP4 or MOV video file.");
+      return;
+    }
+    if (file.size > 500 * 1024 * 1024) {
+      setError("That video is larger than the 500MB limit.");
+      return;
+    }
+
+    try {
+      setStep("requesting");
+      const extension = file.name.split(".").pop() ?? "mp4";
+      const createRes = await fetch("/api/videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "initial", linkedIssueId: null, fileExtension: extension }),
+      });
+      const createBody = await createRes.json();
+      if (!createRes.ok) {
+        throw new Error(createBody?.error?.message ?? "Couldn't start the upload.");
+      }
+
+      setStep("uploading");
+      const supabase = createClient();
+      const { error: uploadError } = await supabase.storage
+        .from("player-videos")
+        .uploadToSignedUrl(createBody.storagePath, createBody.uploadToken, file);
+      if (uploadError) throw uploadError;
+
+      setStep("confirming");
+      const duration = await getVideoDuration(file).catch(() => 0);
+      const confirmRes = await fetch(`/api/videos/${createBody.videoId}/confirm-upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ durationSeconds: duration || 1 }),
+      });
+      const confirmBody = await confirmRes.json();
+      if (!confirmRes.ok) {
+        throw new Error(confirmBody?.error?.message ?? "Couldn't confirm the upload.");
+      }
+
+      setStep("done");
+      router.push(`/videos/${createBody.videoId}`);
+      router.refresh();
+    } catch (err) {
+      setStep("idle");
+      setError(toUserMessage(err));
+    }
+  }
+
+  const stepLabel: Record<Step, string | null> = {
+    idle: null,
+    requesting: "Preparing upload...",
+    uploading: "Uploading video...",
+    confirming: "Confirming...",
+    done: "Done — redirecting...",
+  };
+
+  return (
+    <div className="rounded-2xl border border-black/10 bg-white p-8 text-center dark:border-white/10 dark:bg-zinc-950">
+      <h2 className="text-lg font-medium text-black dark:text-white">Upload a side-on video</h2>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+        Record your batting from side-on, MP4 or MOV, up to 500MB.
+      </p>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="video/mp4,video/quicktime,video/x-m4v"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) void handleFileSelected(file);
+        }}
+      />
+
+      <Button
+        type="button"
+        className="mx-auto mt-6"
+        disabled={step !== "idle"}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        {stepLabel[step] ?? "Choose video"}
+      </Button>
+
+      {error ? <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+    </div>
+  );
+}
