@@ -98,7 +98,7 @@ Where a technology is rejected, the reason is stated in terms of these criteria 
 
 **7. Migration risk:** Low — a Next.js marketing site can be replaced by a simpler static site later with no impact on the mobile app or backend; nothing else depends on it.
 
-**8. Cost considerations:** Free/open source; hosting cost depends on platform (§5 addresses Cloudflare Pages as the selected host).
+**8. Cost considerations:** Free/open source; hosting cost depends on platform (§6 addresses Vercel as the selected host).
 
 **9. MVP vs future scale:** **Not MVP-critical** — no v1 feature in [01-product-requirements.md](./01-product-requirements.md) requires it beyond an optional marketing page. Explicitly deferred: build only when the marketing site or coach dashboard is actually prioritised, not as part of the MVP loop milestones ([roadmap/00-mvp.md](../roadmap/00-mvp.md)).
 
@@ -186,9 +186,17 @@ The Coordinator API and CV microservice ([03-system-architecture.md](./03-system
 
 **9. MVP vs future scale:** Strong MVP fit; large-scale suitability is good but not unlimited — very high, sustained throughput may eventually favour a more manually-tuned AWS/GCE or Kubernetes setup. Not a decision that needs to be made now (§9 of [03-system-architecture.md](./03-system-architecture.md) already frames this as a "replace when volume demands it" component).
 
+### Vercel — marketing site hosting
+
+**Vercel** hosts the Next.js marketing site (§3). As the company behind Next.js, Vercel gives first-party, zero-config deploys directly from the GitHub repo (build/preview/production environments per branch and PR out of the box) — the best-supported host for exactly this framework, and the natural fit for a small team that wants push-to-deploy with no separate CI/CD to configure. Free "Hobby" tier covers the marketing site's traffic at MVP scale; paid tiers scale with bandwidth/build-minutes if usage grows.
+
+**Alternatives considered:** Cloudflare Pages — comparable static-site edge delivery and free-tier generosity; was the prior placeholder in this document. Not rejected on capability, but Vercel's tighter first-party integration with Next.js (preview deployments per PR, zero-config image optimisation, framework-aware build detection) is the more direct fit given Next.js is already the selected framework (§3) — and Vercel remains a strictly independent choice from the Coordinator API/CV microservice host (§ above), so it carries no lock-in risk to the rest of the stack. Reconsider only if Cloudflare's bundled ecosystem (Pages + R2 in one account) becomes more valuable than Vercel's DX once R2 (below) is actually adopted.
+
+**Migration risk:** Low — a static/SSR marketing site with no backend logic of its own is portable to any static host (Cloudflare Pages, Netlify, S3+CloudFront) with minimal rework.
+
 ### Cloudflare's actual role
 
-Selected narrowly, not for compute: **Cloudflare Pages** hosts the Next.js marketing site (§3) — fast global edge delivery for a mostly-static site is exactly Cloudflare's strength. **Cloudflare R2** (S3-compatible storage with zero egress fees) is flagged as a **future cost optimisation** for video/media delivery once Supabase Storage's bandwidth costs become material at scale — not adopted on day one, to avoid fragmenting the auth-integrated signed-URL model in [04-database.md](./04-database.md) §6 across two storage systems before there's a real cost reason to.
+Selected narrowly, not for hosting the marketing site: **Cloudflare R2** (S3-compatible storage with zero egress fees) is flagged as a **future cost optimisation** for video/media delivery once Supabase Storage's bandwidth costs become material at scale — not adopted on day one, to avoid fragmenting the auth-integrated signed-URL model in [04-database.md](./04-database.md) §6 across two storage systems before there's a real cost reason to.
 
 ---
 
@@ -355,7 +363,7 @@ graph TB
     Sentry["Sentry (errors, both platforms)"]
     PostHog["PostHog (product analytics)"]
     ExpoPush["Expo Notifications\n(FCM + APNs, FCM project required)"]
-    CFPages["Cloudflare Pages\n(marketing site hosting)"]
+    VercelHost["Vercel\n(marketing site hosting)"]
     Stripe["Stripe\n(reserved, not built in MVP)"]
 
     Mobile -->|auth, direct RLS-scoped queries, storage| Auth
@@ -368,7 +376,7 @@ graph TB
     Mobile -.-> Sentry
     API -.-> Sentry
     Mobile -.-> PostHog
-    Web --> CFPages
+    Web --> VercelHost
 ```
 
 ### Confirmed / revised against [03-system-architecture.md](./03-system-architecture.md) §0
@@ -381,7 +389,7 @@ graph TB
 | 4 | Anthropic Claude for explanation generation | **Confirmed**, acknowledged as the closest call in the stack, with OpenAI as a low-risk swap-in if warranted later (§7) |
 | 5 | Postgres-backed job table over managed queue | **Unchanged** — not in this evaluation's scope; still the right MVP-scale call per [03-system-architecture.md](./03-system-architecture.md) §0.5 |
 | — | Coordinator API/CV microservice host: "Fly.io or Render, undecided" | **Resolved: Google Cloud Cloud Run** — new decision, not previously made (§6) |
-| — | Marketing site framework: unspecified | **Resolved: Next.js on Cloudflare Pages**, explicitly deferred and not MVP-critical (§3, §6) |
+| — | Marketing site framework: unspecified | **Resolved: Next.js on Vercel**, explicitly deferred and not MVP-critical (§3, §6) |
 
 ### What did *not* change
 Database schema, API contracts, coaching-engine logic, and UX specification are all host/vendor-agnostic by design and require **no changes** as a result of this document — confirming that [04-database.md](./04-database.md) through [12-testing.md](./12-testing.md) were written at the right level of abstraction.
