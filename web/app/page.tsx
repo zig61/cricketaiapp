@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
+import { DemoLoginButton } from "@/components/demo/DemoLoginButton";
 
 export default function Home() {
   return (
@@ -19,6 +20,9 @@ export default function Home() {
           <Link href="/login">
             <Button variant="secondary">Log in</Button>
           </Link>
+        </div>
+        <div className="mt-2 w-full max-w-[220px]">
+          <DemoLoginButton />
         </div>
         <p className="mt-2 text-sm text-zinc-500 dark:text-zinc-500">
           The app is in development — this site will grow alongside it.

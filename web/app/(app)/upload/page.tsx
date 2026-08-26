@@ -1,10 +1,13 @@
 import { UploadForm } from "@/components/upload/UploadForm";
+import { isDemoMode } from "@/lib/demo";
 
-export default function UploadPage() {
+export default async function UploadPage() {
+  const demo = await isDemoMode();
+
   return (
     <div className="mx-auto max-w-lg">
       <h1 className="mb-6 text-2xl font-semibold text-black dark:text-white">Analyse your batting</h1>
-      <UploadForm />
+      <UploadForm demo={demo} />
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toUserMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { DemoLoginButton } from "@/components/demo/DemoLoginButton";
 
 export function LoginForm() {
   const router = useRouter();
@@ -77,6 +78,14 @@ export function LoginForm() {
           {loading ? "Logging in..." : "Log in"}
         </Button>
       </form>
+
+      <div className="my-6 flex items-center gap-3">
+        <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+        <span className="text-xs text-zinc-400">or</span>
+        <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+      </div>
+
+      <DemoLoginButton />
 
       <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
         New to Cricket AI?{" "}

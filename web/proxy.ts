@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { DEMO_COOKIE } from "@/lib/demo-constants";
 
 const PUBLIC_PATH_PREFIXES = ["/login", "/signup", "/auth"];
 
@@ -11,6 +12,19 @@ function isPublicPath(pathname: string): boolean {
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const publicPath = isPublicPath(pathname);
+
+  // Demo mode: a self-contained walkthrough with fixture data, no Supabase
+  // project required at all. Bypasses real auth entirely — every page that
+  // reads it must treat it as sample data, never real account data.
+  if (request.cookies.get(DEMO_COOKIE)?.value === "1") {
+    if (pathname === "/login" || pathname === "/signup") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/home";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next({ request });
+  }
 
   // Supabase isn't configured yet (no project created / env vars not set in
   // this deployment) — constructing a client would throw and 500 every

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/Button";
+import { isDemoMode, demoProfile } from "@/lib/demo";
 
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -13,6 +14,11 @@ function Row({ label, value }: { label: string; value: string | null | undefined
 }
 
 export default async function ProfilePage() {
+  const demo = await isDemoMode();
+  if (demo) {
+    return <ProfileView profile={demoProfile} demo />;
+  }
+
   const supabase = await createClient();
   const { data: claims } = await supabase.auth.getClaims();
   if (!claims?.claims.sub) redirect("/login");
@@ -25,15 +31,31 @@ export default async function ProfilePage() {
 
   if (!profile) redirect("/onboarding");
 
+  return <ProfileView profile={profile} demo={false} />;
+}
+
+function ProfileView({
+  profile,
+  demo,
+}: {
+  profile: typeof demoProfile;
+  demo: boolean;
+}) {
   return (
     <div className="mx-auto max-w-lg">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-black dark:text-white">Your profile</h1>
-        <Link href="/onboarding">
-          <Button variant="secondary" className="h-9 px-4 text-xs">
-            Edit
+        {demo ? (
+          <Button variant="secondary" className="h-9 px-4 text-xs" disabled>
+            Edit (demo)
           </Button>
-        </Link>
+        ) : (
+          <Link href="/onboarding">
+            <Button variant="secondary" className="h-9 px-4 text-xs">
+              Edit
+            </Button>
+          </Link>
+        )}
       </div>
 
       <div className="mt-6 rounded-2xl border border-black/10 bg-white px-6 dark:border-white/10 dark:bg-zinc-950">

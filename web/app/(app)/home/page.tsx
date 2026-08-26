@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/Button";
 import type { Video } from "@/lib/database.types";
+import { isDemoMode, demoProfile, demoVideos } from "@/lib/demo";
 
 function statusLabel(status: Video["status"]): string {
   switch (status) {
@@ -22,6 +23,10 @@ function statusLabel(status: Video["status"]): string {
 }
 
 export default async function HomePage() {
+  if (await isDemoMode()) {
+    return <HomeView profile={demoProfile} videos={demoVideos} />;
+  }
+
   const supabase = await createClient();
   const { data: claims } = await supabase.auth.getClaims();
   if (!claims?.claims.sub) redirect("/login");
@@ -39,6 +44,17 @@ export default async function HomePage() {
   if (profile && !profile.playing_role) {
     redirect("/onboarding");
   }
+
+  return <HomeView profile={profile} videos={videos} />;
+}
+
+function HomeView({
+  profile,
+  videos,
+}: {
+  profile: { display_name: string } | null;
+  videos: Video[] | null;
+}) {
 
   return (
     <div className="flex flex-col gap-10">

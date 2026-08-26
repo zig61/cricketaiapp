@@ -5,8 +5,11 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { toUserMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/Button";
+import { DEMO_VIDEO_ID } from "@/lib/demo-constants";
 
 type Step = "idle" | "requesting" | "uploading" | "confirming" | "done";
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getVideoDuration(file: File): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -21,7 +24,7 @@ function getVideoDuration(file: File): Promise<number> {
   });
 }
 
-export function UploadForm() {
+export function UploadForm({ demo = false }: { demo?: boolean }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>("idle");
@@ -36,6 +39,20 @@ export function UploadForm() {
     }
     if (file.size > 500 * 1024 * 1024) {
       setError("That video is larger than the 500MB limit.");
+      return;
+    }
+
+    if (demo) {
+      // No real backend in demo mode — simulate the same step sequence so
+      // the flow looks and feels real, then land on the fixed demo result.
+      setStep("requesting");
+      await sleep(500);
+      setStep("uploading");
+      await sleep(900);
+      setStep("confirming");
+      await sleep(500);
+      setStep("done");
+      router.push(`/videos/${DEMO_VIDEO_ID}`);
       return;
     }
 
