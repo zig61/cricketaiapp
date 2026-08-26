@@ -62,8 +62,8 @@ function OptionGroup<T extends string>({
           onClick={() => onChange(option.value)}
           className={`rounded-full border px-4 py-2 text-sm transition-colors ${
             value === option.value
-              ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
-              : "border-black/10 text-black hover:bg-black/[.04] dark:border-white/15 dark:text-white dark:hover:bg-white/[.06]"
+              ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+              : "border-[var(--border-strong)] text-[var(--foreground)] hover:border-[var(--accent)] hover:bg-white/[0.03]"
           }`}
         >
           {option.label}
@@ -147,36 +147,36 @@ export function OnboardingForm({ displayName }: { displayName: string }) {
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold text-black dark:text-white">
+        <h1 className="font-display text-2xl font-semibold text-[var(--foreground)]">
           Welcome, {displayName}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-[var(--muted)]">
           A few quick questions so your coaching feels personal from the start. Cricket AI
           currently focuses on batting technique.
         </p>
       </div>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">Age range</legend>
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">Age range</legend>
         <OptionGroup options={AGE_BANDS} value={ageBand} onChange={setAgeBand} />
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">
           Playing level
         </legend>
         <OptionGroup options={PLAYING_LEVELS} value={playingLevel} onChange={setPlayingLevel} />
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">
           Playing role
         </legend>
         <OptionGroup options={PLAYING_ROLES} value={playingRole} onChange={setPlayingRole} />
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">
           Batting hand
         </legend>
         <OptionGroup
@@ -190,7 +190,7 @@ export function OnboardingForm({ displayName }: { displayName: string }) {
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">
           Experience level
         </legend>
         <OptionGroup
@@ -201,7 +201,7 @@ export function OnboardingForm({ displayName }: { displayName: string }) {
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">
           Preferred formats
         </legend>
         <div className="flex flex-wrap gap-2">
@@ -212,8 +212,8 @@ export function OnboardingForm({ displayName }: { displayName: string }) {
               onClick={() => toggleFormat(format.value)}
               className={`rounded-full border px-4 py-2 text-sm transition-colors ${
                 formats.includes(format.value)
-                  ? "border-black bg-black text-white dark:border-white dark:bg-white dark:text-black"
-                  : "border-black/10 text-black hover:bg-black/[.04] dark:border-white/15 dark:text-white dark:hover:bg-white/[.06]"
+                  ? "border-[var(--accent)] bg-[var(--accent)] text-white"
+                  : "border-[var(--border-strong)] text-[var(--foreground)] hover:border-[var(--accent)] hover:bg-white/[0.03]"
               }`}
             >
               {format.label}
@@ -223,7 +223,7 @@ export function OnboardingForm({ displayName }: { displayName: string }) {
       </fieldset>
 
       <fieldset className="flex flex-col gap-2">
-        <legend className="mb-1 text-sm font-medium text-black dark:text-white">
+        <legend className="mb-1 text-sm font-medium text-[var(--foreground)]">
           Training sessions per week: {trainingFrequency}
         </legend>
         <input
@@ -236,7 +236,7 @@ export function OnboardingForm({ displayName }: { displayName: string }) {
         />
       </fieldset>
 
-      {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+      {error ? <p className="text-sm text-[var(--critical)]">{error}</p> : null}
 
       <Button type="submit" disabled={loading} className="w-fit">
         {loading ? "Saving..." : "Finish setup"}

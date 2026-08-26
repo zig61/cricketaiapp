@@ -1,8 +1,25 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #05070c;
+  --surface: #0c1220;
+  --surface-2: #121a2c;
+  --border: rgba(148, 178, 255, 0.14);
+  --border-strong: rgba(148, 178, 255, 0.28);
+  --foreground: #f6f8fc;
+  --muted: #8b93ab;
+  --muted-2: #5b6478;
+
+  /* Brand accent — validated blue ramp (dataviz skill reference palette),
+     dark-surface step. */
+  --accent: #3987e5;
+  --accent-strong: #5b9eef;
+  --accent-foreground: #ffffff;
+
+  /* Status colors — reserved, never reused for anything else. */
+  --good: #22c55e;
+  --warning: #fab219;
+  --critical: #ef5350;
 }
 
 @theme inline {
@@ -10,17 +27,48 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-display: var(--font-display);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -10%, rgba(57, 135, 229, 0.16), transparent),
+    linear-gradient(rgba(148, 178, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 178, 255, 0.05) 1px, transparent 1px);
+  background-size:
+    100% 100%,
+    48px 48px,
+    48px 48px;
+  background-attachment: fixed;
+}
+
+.font-display {
+  font-family: var(--font-display), var(--font-geist-sans), sans-serif;
+}
+
+.surface-card {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+}
+
+.glow-accent {
+  box-shadow:
+    0 0 0 1px var(--border-strong),
+    0 8px 24px -8px rgba(57, 135, 229, 0.45);
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.85);
+  }
 }

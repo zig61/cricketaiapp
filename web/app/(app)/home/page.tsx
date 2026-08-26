@@ -59,17 +59,19 @@ function HomeView({
   return (
     <div className="flex flex-col gap-10">
       <div>
-        <h1 className="text-2xl font-semibold text-black dark:text-white">
+        <h1 className="font-display text-2xl font-semibold text-[var(--foreground)]">
           Welcome back{profile?.display_name ? `, ${profile.display_name}` : ""}
         </h1>
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 text-sm text-[var(--muted)]">
           Record your shot, get a diagnosis, get a drill.
         </p>
       </div>
 
-      <div className="rounded-2xl border border-black/10 bg-white p-6 dark:border-white/10 dark:bg-zinc-950">
+      <div className="surface-card rounded-2xl p-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-medium text-black dark:text-white">Recent videos</h2>
+          <h2 className="font-display text-base font-semibold text-[var(--foreground)]">
+            Recent videos
+          </h2>
           <Link href="/upload">
             <Button className="h-9 px-4 text-xs">Upload video</Button>
           </Link>
@@ -81,13 +83,13 @@ function HomeView({
               <li key={video.id}>
                 <Link
                   href={`/videos/${video.id}`}
-                  className="flex items-center justify-between rounded-lg border border-black/5 px-4 py-3 transition-colors hover:bg-black/[.02] dark:border-white/5 dark:hover:bg-white/[.04]"
+                  className="flex items-center justify-between rounded-lg border border-[var(--border)] px-4 py-3 transition-colors hover:border-[var(--accent)] hover:bg-white/[0.03]"
                 >
-                  <span className="text-sm text-black dark:text-white">
+                  <span className="text-sm text-[var(--foreground)]">
                     {video.kind === "followup" ? "Follow-up video" : "Video"} —{" "}
                     {new Date(video.created_at).toLocaleDateString()}
                   </span>
-                  <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  <span className="text-xs text-[var(--muted)]">
                     {statusLabel(video.status)}
                   </span>
                 </Link>
@@ -95,7 +97,7 @@ function HomeView({
             ))}
           </ul>
         ) : (
-          <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mt-4 text-sm text-[var(--muted)]">
             No videos yet — upload your first shot to get started.
           </p>
         )}

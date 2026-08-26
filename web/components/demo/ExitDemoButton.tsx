@@ -15,7 +15,7 @@ export function ExitDemoButton() {
   return (
     <button
       onClick={handleClick}
-      className="text-sm text-zinc-500 transition-colors hover:text-black dark:text-zinc-400 dark:hover:text-white"
+      className="text-sm text-[var(--muted)] transition-colors hover:text-[var(--foreground)]"
     >
       Exit demo
     </button>

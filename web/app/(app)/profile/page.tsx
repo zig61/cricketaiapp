@@ -6,9 +6,9 @@ import { isDemoMode, demoProfile } from "@/lib/demo";
 
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
   return (
-    <div className="flex items-center justify-between border-b border-black/5 py-3 last:border-0 dark:border-white/5">
-      <span className="text-sm text-zinc-500 dark:text-zinc-400">{label}</span>
-      <span className="text-sm font-medium text-black dark:text-white">{value || "Not set"}</span>
+    <div className="flex items-center justify-between border-b border-[var(--border)] py-3 last:border-0">
+      <span className="text-sm text-[var(--muted)]">{label}</span>
+      <span className="text-sm font-medium text-[var(--foreground)]">{value || "Not set"}</span>
     </div>
   );
 }
@@ -44,7 +44,9 @@ function ProfileView({
   return (
     <div className="mx-auto max-w-lg">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-black dark:text-white">Your profile</h1>
+        <h1 className="font-display text-2xl font-semibold text-[var(--foreground)]">
+          Your profile
+        </h1>
         {demo ? (
           <Button variant="secondary" className="h-9 px-4 text-xs" disabled>
             Edit (demo)
@@ -58,7 +60,7 @@ function ProfileView({
         )}
       </div>
 
-      <div className="mt-6 rounded-2xl border border-black/10 bg-white px-6 dark:border-white/10 dark:bg-zinc-950">
+      <div className="surface-card mt-6 rounded-2xl px-6">
         <Row label="Name" value={profile.display_name} />
         <Row label="Age range" value={profile.age_band?.replace(/_/g, " ")} />
         <Row label="Playing level" value={profile.playing_level?.replace(/_/g, " ")} />

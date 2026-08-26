@@ -6,7 +6,9 @@ export default async function UploadPage() {
 
   return (
     <div className="mx-auto max-w-lg">
-      <h1 className="mb-6 text-2xl font-semibold text-black dark:text-white">Analyse your batting</h1>
+      <h1 className="font-display mb-6 text-2xl font-semibold text-[var(--foreground)]">
+        Analyse your batting
+      </h1>
       <UploadForm demo={demo} />
     </div>
   );

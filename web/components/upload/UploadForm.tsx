@@ -106,9 +106,11 @@ export function UploadForm({ demo = false }: { demo?: boolean }) {
   };
 
   return (
-    <div className="rounded-2xl border border-black/10 bg-white p-8 text-center dark:border-white/10 dark:bg-zinc-950">
-      <h2 className="text-lg font-medium text-black dark:text-white">Upload a side-on video</h2>
-      <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500 dark:text-zinc-400">
+    <div className="surface-card glow-accent rounded-2xl p-8 text-center">
+      <h2 className="font-display text-lg font-semibold text-[var(--foreground)]">
+        Upload a side-on video
+      </h2>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-[var(--muted)]">
         Record your batting from side-on, MP4 or MOV, up to 500MB.
       </p>
 
@@ -132,7 +134,7 @@ export function UploadForm({ demo = false }: { demo?: boolean }) {
         {stepLabel[step] ?? "Choose video"}
       </Button>
 
-      {error ? <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-[var(--critical)]">{error}</p> : null}
     </div>
   );
 }

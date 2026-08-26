@@ -14,15 +14,18 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const demo = await isDemoMode();
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-black">
+    <div className="flex min-h-screen flex-col">
       {demo ? (
-        <div className="bg-amber-400 px-6 py-2 text-center text-xs font-medium text-black">
-          Demo mode — sample data, not a real account. Nothing here is saved.
+        <div className="bg-[var(--warning)] px-6 py-2 text-center text-xs font-semibold tracking-wide text-black">
+          DEMO MODE — sample data, not a real account. Nothing here is saved.
         </div>
       ) : null}
-      <header className="sticky top-0 z-10 border-b border-black/10 bg-zinc-50/80 backdrop-blur-sm dark:border-white/10 dark:bg-black/80">
+      <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--background)]/85 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-          <Link href="/home" className="text-base font-semibold text-black dark:text-white">
+          <Link
+            href="/home"
+            className="font-display text-base font-semibold text-[var(--foreground)]"
+          >
             Cricket AI
           </Link>
           <nav className="flex items-center gap-6">
@@ -30,7 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
               <Link
                 key={item.href}
                 href={item.href}
-                className="text-sm text-zinc-500 transition-colors hover:text-black dark:text-zinc-400 dark:hover:text-white"
+                className="text-sm text-[var(--muted)] transition-colors hover:text-[var(--foreground)]"
               >
                 {item.label}
               </Link>

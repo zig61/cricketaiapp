@@ -51,10 +51,13 @@ export function SignupForm() {
 
   if (checkEmail) {
     return (
-      <div className="w-full max-w-sm text-center">
-        <h1 className="mb-2 text-2xl font-semibold text-black dark:text-white">Check your email</h1>
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          We sent a confirmation link to <span className="font-medium">{email}</span>. Click it to
+      <div className="surface-card w-full max-w-sm rounded-2xl p-8 text-center">
+        <h1 className="font-display mb-2 text-2xl font-semibold text-[var(--foreground)]">
+          Check your email
+        </h1>
+        <p className="text-sm text-[var(--muted)]">
+          We sent a confirmation link to{" "}
+          <span className="font-medium text-[var(--foreground)]">{email}</span>. Click it to
           finish creating your account.
         </p>
       </div>
@@ -62,15 +65,17 @@ export function SignupForm() {
   }
 
   return (
-    <div className="w-full max-w-sm">
-      <h1 className="mb-1 text-2xl font-semibold text-black dark:text-white">Create your account</h1>
-      <p className="mb-8 text-sm text-zinc-500 dark:text-zinc-400">
+    <div className="surface-card w-full max-w-sm rounded-2xl p-8">
+      <h1 className="font-display mb-1 text-2xl font-semibold text-[var(--foreground)]">
+        Create your account
+      </h1>
+      <p className="mb-8 text-sm text-[var(--muted)]">
         Start your coaching journey with Cricket AI.
       </p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="displayName" className="text-sm font-medium text-black dark:text-white">
+          <label htmlFor="displayName" className="text-sm font-medium text-[var(--foreground)]">
             Name
           </label>
           <Input
@@ -84,7 +89,7 @@ export function SignupForm() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="email" className="text-sm font-medium text-black dark:text-white">
+          <label htmlFor="email" className="text-sm font-medium text-[var(--foreground)]">
             Email
           </label>
           <Input
@@ -98,7 +103,7 @@ export function SignupForm() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="password" className="text-sm font-medium text-black dark:text-white">
+          <label htmlFor="password" className="text-sm font-medium text-[var(--foreground)]">
             Password
           </label>
           <Input
@@ -112,16 +117,16 @@ export function SignupForm() {
           />
         </div>
 
-        {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+        {error ? <p className="text-sm text-[var(--critical)]">{error}</p> : null}
 
         <Button type="submit" disabled={loading} className="mt-2">
           {loading ? "Creating account..." : "Create account"}
         </Button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
+      <p className="mt-6 text-center text-sm text-[var(--muted)]">
         Already have an account?{" "}
-        <Link href="/login" className="font-medium text-black underline dark:text-white">
+        <Link href="/login" className="font-medium text-[var(--accent-strong)] hover:underline">
           Log in
         </Link>
       </p>

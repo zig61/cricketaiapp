@@ -37,15 +37,15 @@ export function LoginForm() {
   }
 
   return (
-    <div className="w-full max-w-sm">
-      <h1 className="mb-1 text-2xl font-semibold text-black dark:text-white">Welcome back</h1>
-      <p className="mb-8 text-sm text-zinc-500 dark:text-zinc-400">
-        Log in to continue your coaching.
-      </p>
+    <div className="surface-card w-full max-w-sm rounded-2xl p-8">
+      <h1 className="font-display mb-1 text-2xl font-semibold text-[var(--foreground)]">
+        Welcome back
+      </h1>
+      <p className="mb-8 text-sm text-[var(--muted)]">Log in to continue your coaching.</p>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="email" className="text-sm font-medium text-black dark:text-white">
+          <label htmlFor="email" className="text-sm font-medium text-[var(--foreground)]">
             Email
           </label>
           <Input
@@ -59,7 +59,7 @@ export function LoginForm() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="password" className="text-sm font-medium text-black dark:text-white">
+          <label htmlFor="password" className="text-sm font-medium text-[var(--foreground)]">
             Password
           </label>
           <Input
@@ -72,7 +72,7 @@ export function LoginForm() {
           />
         </div>
 
-        {error ? <p className="text-sm text-red-600 dark:text-red-400">{error}</p> : null}
+        {error ? <p className="text-sm text-[var(--critical)]">{error}</p> : null}
 
         <Button type="submit" disabled={loading} className="mt-2">
           {loading ? "Logging in..." : "Log in"}
@@ -80,16 +80,16 @@ export function LoginForm() {
       </form>
 
       <div className="my-6 flex items-center gap-3">
-        <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
-        <span className="text-xs text-zinc-400">or</span>
-        <div className="h-px flex-1 bg-black/10 dark:bg-white/10" />
+        <div className="h-px flex-1 bg-[var(--border)]" />
+        <span className="text-xs text-[var(--muted-2)]">or</span>
+        <div className="h-px flex-1 bg-[var(--border)]" />
       </div>
 
       <DemoLoginButton />
 
-      <p className="mt-6 text-center text-sm text-zinc-500 dark:text-zinc-400">
+      <p className="mt-6 text-center text-sm text-[var(--muted)]">
         New to Cricket AI?{" "}
-        <Link href="/signup" className="font-medium text-black underline dark:text-white">
+        <Link href="/signup" className="font-medium text-[var(--accent-strong)] hover:underline">
           Create an account
         </Link>
       </p>
