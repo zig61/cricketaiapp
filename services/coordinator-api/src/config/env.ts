@@ -8,6 +8,10 @@ const envSchema = z.object({
   SUPABASE_JWKS_URL: z.string().url().optional(),
   ANTHROPIC_API_KEY: z.string().min(1),
   CV_SERVICE_URL: z.string().url(),
+  // Shared secret for service-to-service calls (e.g. the web app triggering
+  // pipeline processing) — not a player JWT, so it doesn't go through the
+  // auth plugin.
+  INTERNAL_API_SECRET: z.string().min(16),
 });
 
 export type Env = z.infer<typeof envSchema> & { SUPABASE_JWKS_URL: string };

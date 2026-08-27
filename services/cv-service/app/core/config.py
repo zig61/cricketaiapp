@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     port: int = 8000
     env: str = "development"
+    pose_model_path: str = "models/pose_landmarker_lite.task"
 
 
 settings = Settings()

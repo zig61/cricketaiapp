@@ -50,12 +50,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ vid
     return errorResponse(500, "INTERNAL_ERROR", "Couldn't confirm the upload.");
   }
 
-  // Real pipeline stages (Milestones 05+) aren't built yet — this row exists
-  // so the status/progress model is genuinely wired end-to-end, not faked.
   await supabase.from("processing_jobs").insert({
     video_id: videoId,
     stage: "validate",
   });
+
+  // Triggers coordinator-api to advance validate -> extract_frames ->
+  // pose_estimate -> measure (head_stability only, for now). coordinator-api
+  // isn't deployed anywhere yet, so COORDINATOR_API_URL is unset outside of
+  // local dev — skip quietly rather than fail the upload confirmation over a
+  // side effect. A real production version of this would go through a queue
+  // with retries, not a synchronous fire-and-forget call.
+  const coordinatorApiUrl = process.env.COORDINATOR_API_URL;
+  if (coordinatorApiUrl && process.env.INTERNAL_API_SECRET) {
+    try {
+      await fetch(`${coordinatorApiUrl}/internal/videos/${videoId}/process`, {
+        method: "POST",
+        headers: { "x-internal-secret": process.env.INTERNAL_API_SECRET },
+      });
+    } catch {
+      // Non-fatal — see comment above.
+    }
+  }
 
   return NextResponse.json({ videoId, status: "validating" }, { status: 202 });
 }

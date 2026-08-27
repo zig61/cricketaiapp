@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Env } from "./config/env.js";
 import { createSupabaseJwks } from "./lib/jwks.js";
+import { createSupabaseAdmin } from "./lib/supabaseAdmin.js";
 import authPlugin from "./plugins/auth.js";
 import errorHandlerPlugin from "./plugins/error-handler.js";
 import rateLimitPlugin from "./plugins/rate-limit.js";
@@ -16,7 +17,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     issuer: `${env.SUPABASE_URL}/auth/v1`,
     audience: "authenticated",
   });
-  await app.register(registerRoutes);
+  await app.register(registerRoutes, { env, supabaseAdmin: createSupabaseAdmin(env) });
 
   return app;
 }

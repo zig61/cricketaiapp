@@ -21,6 +21,9 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 
+# downloaded ML model files — fetched by scripts/download_model.sh / Dockerfile, not committed
+services/cv-service/models/*.task
+
 # env
 .env
 .env.local

@@ -15,6 +15,7 @@ export default tseslint.config(
       "**/.expo/**",
       "**/.next/**",
       "**/coverage/**",
+      "**/.venv/**",
       "**/*.config.js",
       "**/*.config.mjs",
     ],

@@ -73,7 +73,12 @@ export default async function VideoDetailPage({
   let measurements: ViewModel["measurements"] = [];
   let drill: ViewModel["drill"] = null;
 
-  if (video.status === "complete") {
+  // Not gated on video.status === "complete": with only head_stability built
+  // out, a real video's pipeline currently finishes at "analysing" (the full
+  // loop — diagnose/explain/match_drill — hasn't run), so an analyses row can
+  // exist well before status reaches "complete". Query for it whenever it
+  // exists; issues/drill naturally stay empty until those stages are built.
+  {
     const { data: analysis } = await supabase
       .from("analyses")
       .select("id")
