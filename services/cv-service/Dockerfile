@@ -1,12 +1,15 @@
-# Deploy target: Google Cloud Run (docs/13-technology-decisions.md §6).
-# Not buildable/verifiable in the scaffolding environment (no Docker available there) —
-# the mediapipe/opencv system-library requirements on Debian slim are unverified;
-# if the container fails to start, `libglib2.0-0`/`libgl1` are the usual culprits
-# for headless OpenCV + MediaPipe on a minimal base image.
+# Deploy target confirmed working on Render (2026-08-30) after one fix: the
+# original build ran, but the container crashed on start with
+# `ImportError: libGL.so.1: cannot open shared object file` — opencv-python-headless
+# still dynamically links against libGL despite the "headless" name. Added the
+# full standard set below (libgl1 fixed the actual crash; the rest are the same
+# family of commonly-needed shared libs for headless OpenCV on slim Debian,
+# added proactively to avoid a third failed-deploy cycle discovering them
+# one at a time).
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl libglib2.0-0 \
+    curl libglib2.0-0 libgl1 libgomp1 libsm6 libxext6 libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
