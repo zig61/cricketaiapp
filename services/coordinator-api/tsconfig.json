@@ -1,6 +1,16 @@
 {
-  "extends": ["../../tsconfig.base.json"],
   "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
