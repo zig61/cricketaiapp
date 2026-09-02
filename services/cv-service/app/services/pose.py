@@ -291,17 +291,29 @@ def compute_weight_transfer_from_samples(
     if len(valid) < MIN_VALID_FRAMES:
         return None
 
+    # The base of support is established once, in stance, and held fixed —
+    # NOT recomputed per frame. Using each frame's own live ankle positions
+    # as the denominator (the first version of this function did) is
+    # unstable: real per-frame landmark noise can put the front/back ankle
+    # only millimeters apart in a single frame, and dividing by that
+    # near-zero denominator produces wildly inflated percentages (this was
+    # caught by a real live run returning 12836% — physically impossible —
+    # before this fix).
     baseline_count = max(1, round(len(valid) * BASELINE_FRACTION))
-    baseline_base_width = (
-        sum(abs(ankle_x(s, front) - ankle_x(s, back)) for s in valid[:baseline_count])
-        / baseline_count
-    )
+    baseline_front_x = sum(ankle_x(s, front) for s in valid[:baseline_count]) / baseline_count
+    baseline_back_x = sum(ankle_x(s, back) for s in valid[:baseline_count]) / baseline_count
+    baseline_base_width = abs(baseline_front_x - baseline_back_x)
 
-    if baseline_base_width <= 0:
+    # A real cricket stance is normally tens of centimeters wide at the
+    # ankles; anything under 5cm indicates an unreliable stance detection
+    # (motion blur, occlusion, or a camera angle too close to face-on for
+    # this measurement), not a real narrow-based stance.
+    MIN_RELIABLE_BASE_WIDTH_M = 0.05
+    if baseline_base_width < MIN_RELIABLE_BASE_WIDTH_M:
         return None
 
     def percent_of_base(s: FrameSample) -> float:
-        return (s.hip_mid_x - ankle_x(s, back)) / (ankle_x(s, front) - ankle_x(s, back)) * 100
+        return (s.hip_mid_x - baseline_back_x) / (baseline_front_x - baseline_back_x) * 100
 
     peak_percent = max(percent_of_base(s) for s in valid)
     mean_confidence = sum(

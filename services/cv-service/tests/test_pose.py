@@ -163,3 +163,51 @@ def test_returns_none_when_ankles_are_not_visibly_detected():
 def test_raises_on_an_invalid_batting_hand():
     with pytest.raises(ValueError):
         compute_weight_transfer_from_samples([_sample(0.2)], "sideways")
+
+
+def test_a_single_noisy_frame_does_not_blow_up_the_result():
+    # Regression test for a real bug found via live verification (2026-09-02):
+    # the base-width denominator was originally recomputed from each frame's
+    # own (noisy) ankle positions rather than the fixed stance baseline. A
+    # single frame where the ankles briefly appear only 2mm apart (motion
+    # blur / detection noise, not a real stance change) divided by a
+    # near-zero denominator and produced a peak of 12836% on real footage.
+    # With a fixed baseline denominator, one noisy frame's ankle jitter
+    # can't distort the result this way.
+    samples = [
+        _sample(0.28),
+        _sample(0.20),
+        _sample(0.15),
+        _sample(0.075),  # genuine peak: 75%
+        # ankles nearly coincide in this one frame only — should not affect
+        # the result at all, since the baseline was already fixed above.
+        FrameSample(
+            nose_x=0.0,
+            nose_visibility=0.9,
+            left_hip_x=0.10,
+            left_hip_visibility=0.9,
+            right_hip_x=0.10,
+            right_hip_visibility=0.9,
+            left_ankle_x=0.001,
+            left_ankle_visibility=0.9,
+            right_ankle_x=0.302,
+            right_ankle_visibility=0.9,
+        ),
+        _sample(0.10),
+    ]
+
+    result = compute_weight_transfer_from_samples(samples, "right")
+
+    assert result is not None
+    assert result.value_percent == pytest.approx(75.0, abs=0.5)
+    assert result.value_percent < 200  # sanity ceiling — nowhere near the old 12836% bug
+
+
+def test_returns_none_when_the_stance_base_width_is_implausibly_narrow():
+    # Ankles only 2cm apart at baseline — below the real-world floor, so
+    # this is treated as an unreliable detection, not a real narrow stance.
+    samples = [_sample(0.01, left_ankle_x=0.0, right_ankle_x=0.02) for _ in range(6)]
+
+    result = compute_weight_transfer_from_samples(samples, "right")
+
+    assert result is None
