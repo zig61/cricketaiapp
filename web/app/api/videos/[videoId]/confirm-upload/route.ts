@@ -1,6 +1,16 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+// This route synchronously awaits coordinator-api's full pipeline run
+// (validate -> ... -> persist) before responding. A warm run measured ~37s
+// end-to-end (2026-09-02, live verification) -- already past Vercel's
+// unconfigured default (10s on Hobby). 60 is the Hobby-plan ceiling; it
+// covers the warm path with margin, but NOT a cold cv-service (~31s cold
+// start on top of the ~37s run exceeds even this max) -- that failure mode
+// needs a real fix (always-on tier, or an async trigger + queue), not a
+// bigger number here.
+export const maxDuration = 60;
+
 function errorResponse(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message } }, { status });
 }

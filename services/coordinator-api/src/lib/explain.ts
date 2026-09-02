@@ -5,15 +5,54 @@ const EXPLANATION_MODEL = "claude-sonnet-5";
 
 const explanationSchema = z.object({
   observation: z.string().min(1),
-  interpretation: z.string().min(1),
-  recommendationPreview: z.string().min(1),
-  confidenceLabel: z.enum(["high", "medium", "low"]),
+  cause: z.string().min(1),
+  consequence: z.string().min(1),
+  correction: z.string().min(1),
 });
 
-const SYSTEM_PROMPT = `You are a cricket batting coach explaining one diagnosed technique issue to a young player.
-You are given structured facts computed by a deterministic pipeline — a measurement, a root cause, a severity score, and a confidence score.
-Never invent facts not present in the input. Never state a different severity, confidence, or root cause than what you were given.
-Keep language encouraging and age-appropriate for the given age band. Do not mention the specific drill — only bridge to it.`;
+// Defense-in-depth against the model drifting into markers this pipeline
+// doesn't measure (docs/coaching-philosophy.md "DO NOT INVENT DATA"). The
+// system prompt already instructs this; this is a second, code-level check
+// on the actual output, since a prompt instruction is not a guarantee.
+//
+// Deliberately excludes "backlift": the head_falling_away root-cause
+// description itself says the drift happens "between backlift and
+// contact" — the model legitimately echoes that as a timing reference, not
+// a fabricated technical claim about backlift technique. A blocklist can't
+// tell "naming the given timing window" from "inventing a new claim," so it
+// only covers terms that never appear in this pipeline's own inputs.
+const OUT_OF_SCOPE_TERMS = [
+  "grip",
+  "footwork",
+  "foot work",
+  "bat path",
+  "bat speed",
+  "stance",
+  "elbow",
+  "follow-through",
+  "follow through",
+  "weight transfer",
+  "base width",
+  "wrist",
+  "shoulder rotation",
+  "hip rotation",
+];
+
+const SYSTEM_PROMPT = `You are a world-class batting coach speaking directly to a player, reviewing exactly one measurement from their batting video: head_stability — how far their head drifts sideways during the shot, in centimeters. This is the ONLY thing you have evidence for.
+
+You are given structured facts already computed by a deterministic pipeline: the measured value, its reference range, a severity score, a confidence score, and a plain-language root-cause description. You do not decide the diagnosis, severity, root cause, or drill — those are fixed before you're called. Your only job is turning them into a clear, specific, coach-voice explanation.
+
+STRICT SCOPE — this is a hard constraint, not a style preference: You may discuss ONLY head position and head stability during the shot. Do NOT mention, infer, or speculate about grip, footwork, foot movement, bat path, bat speed, backlift, stance, elbow position, shoulder rotation, hip rotation, weight transfer, base width, or wrist position. None of these were measured. Stating anything about them — even something that sounds plausible — is fabrication, not coaching. If the natural cause of head movement would normally involve one of these, do not name it; explain the cause and consequence purely in terms of head position, timing, and its direct effect on contact, without inventing an unmeasured mechanical cause elsewhere in the body.
+
+VOICE: Write like an elite, honest coach, not a commentator. Be specific and causal, never generic ("keep working on it" is not acceptable). Never invent a claim not present in the structured input. Age band, batting hand, and playing level (when given) may only calibrate tone and simplicity of language — they must never change the substance, severity, or confidence of what you say.
+
+Return exactly four fields via the tool call, in this order:
+1. observation — what was seen, stated as fact, tied directly to the measured number.
+2. cause — the likely reason this is happening, framed only in terms of head control and timing.
+3. consequence — the concrete batting outcome this produces (control, contact consistency, scoring options, vulnerability against certain deliveries) — not an abstract statement.
+4. correction — ONE short, memorable technical cue the player can hold in mind while batting. A single sentence, not a list.
+
+Do not add drills, success criteria, or any section beyond these four — those are handled elsewhere in the product.`;
 
 export interface ExplainInput {
   rootCauseKey: string;
@@ -40,17 +79,23 @@ function fallbackExplanation(input: ExplainInput): string {
 }
 
 function composeExplanation(parsed: z.infer<typeof explanationSchema>): string {
-  return [parsed.observation, parsed.interpretation, parsed.recommendationPreview].join(" ");
+  return [parsed.observation, parsed.cause, parsed.consequence, parsed.correction].join(" ");
+}
+
+function containsOutOfScopeClaim(text: string): boolean {
+  const lower = text.toLowerCase();
+  return OUT_OF_SCOPE_TERMS.some((term) => lower.includes(term));
 }
 
 /**
  * Call site A (docs/06-ai-architecture.md §2) — LLM explains, never decides.
  * Every input field is already computed deterministically upstream; the
  * model only turns them into plain-language prose via a schema-constrained
- * tool call. Any failure (network, auth, malformed output) falls back to a
- * deterministic template rather than failing the whole pipeline stage —
- * a diagnosis that already has a valid severity/confidence shouldn't be
- * lost because the LLM call had a hiccup.
+ * tool call, following the Observation -> Cause -> Consequence -> Correction
+ * structure from docs/coaching-philosophy.md. Any failure — network, auth,
+ * malformed output, or the model naming an unmeasured marker (grip,
+ * footwork, bat path, etc.) — falls back to a deterministic template rather
+ * than failing the whole pipeline stage or shipping a fabricated claim.
  */
 export async function explainIssue(apiKey: string, input: ExplainInput): Promise<string> {
   try {
@@ -58,7 +103,6 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
     const response = await client.messages.create({
       model: EXPLANATION_MODEL,
       max_tokens: 500,
-      temperature: 0.25,
       system: SYSTEM_PROMPT,
       messages: [
         {
@@ -84,15 +128,24 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
           input_schema: {
             type: "object",
             properties: {
-              observation: { type: "string", description: "What was seen, tied to the measurement." },
-              interpretation: { type: "string", description: "Why it matters for batting." },
-              recommendationPreview: {
+              observation: {
                 type: "string",
-                description: "One sentence bridging to the drill, without naming it.",
+                description: "What was seen, tied directly to the measured number.",
               },
-              confidenceLabel: { type: "string", enum: ["high", "medium", "low"] },
+              cause: {
+                type: "string",
+                description: "The likely reason, framed only in terms of head control and timing.",
+              },
+              consequence: {
+                type: "string",
+                description: "The concrete batting outcome this produces.",
+              },
+              correction: {
+                type: "string",
+                description: "ONE short, memorable technical cue. A single sentence.",
+              },
             },
-            required: ["observation", "interpretation", "recommendationPreview", "confidenceLabel"],
+            required: ["observation", "cause", "consequence", "correction"],
           },
         },
       ],
@@ -107,7 +160,13 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
     }
 
     const parsed = explanationSchema.parse(toolUse.input);
-    return composeExplanation(parsed);
+    const composed = composeExplanation(parsed);
+
+    if (containsOutOfScopeClaim(composed)) {
+      throw new Error("Model output referenced an unmeasured marker; discarding in favor of fallback.");
+    }
+
+    return composed;
   } catch {
     return fallbackExplanation(input);
   }
