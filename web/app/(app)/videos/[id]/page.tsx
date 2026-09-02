@@ -183,6 +183,12 @@ function VideoView({ model }: { model: ViewModel }) {
           </div>
         ) : null}
 
+        {model.status === "complete" && !model.primaryIssue ? (
+          <p className="mt-2 text-xs text-[var(--muted-2)]">
+            Nothing was flagged with enough confidence to diagnose this time.
+          </p>
+        ) : null}
+
         {model.status !== "complete" && model.status !== "rejected" && model.status !== "failed" ? (
           <p className="mt-2 text-xs text-[var(--muted-2)]">
             Automated analysis isn&apos;t live yet in this build — your video will stay at this

@@ -20,7 +20,11 @@ export default async function internalRoutes(app: FastifyInstance, opts: Registe
     const { videoId } = videoIdParamsSchema.parse(request.params);
 
     return processVideo(
-      { supabaseAdmin: opts.supabaseAdmin, cvServiceUrl: opts.env.CV_SERVICE_URL },
+      {
+        supabaseAdmin: opts.supabaseAdmin,
+        cvServiceUrl: opts.env.CV_SERVICE_URL,
+        anthropicApiKey: opts.env.ANTHROPIC_API_KEY,
+      },
       videoId,
     );
   });

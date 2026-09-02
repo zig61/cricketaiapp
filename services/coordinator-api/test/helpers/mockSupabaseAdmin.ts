@@ -13,6 +13,7 @@ export function queryResult(result: { data: unknown; error?: unknown }) {
     eq: () => chain,
     insert: () => chain,
     update: () => chain,
+    limit: () => chain,
     maybeSingle: () => Promise.resolve(resolved),
     single: () => Promise.resolve(resolved),
     then: (onFulfilled: (value: typeof resolved) => unknown) =>
