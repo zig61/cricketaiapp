@@ -6,7 +6,12 @@ const envSchema = z.object({
   SUPABASE_URL: z.string().url(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
   SUPABASE_JWKS_URL: z.string().url().optional(),
-  ANTHROPIC_API_KEY: z.string().min(1),
+  // .trim() defends against a real failure mode, not a hypothetical one: a
+  // trailing newline pasted into a dashboard's env var field is invisible
+  // in the UI but makes the key an illegal HTTP header value, so every
+  // Anthropic call fails with an opaque "not a legal HTTP header value"
+  // TypeError deep in fetch's header validation (found 2026-09-02).
+  ANTHROPIC_API_KEY: z.string().trim().min(1),
   CV_SERVICE_URL: z.string().url(),
   // Shared secret for service-to-service calls (e.g. the web app triggering
   // pipeline processing) — not a player JWT, so it doesn't go through the
