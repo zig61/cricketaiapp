@@ -167,7 +167,13 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
     }
 
     return composed;
-  } catch {
+  } catch (err) {
+    // Never let an explain failure fail the pipeline stage (see docstring),
+    // but a silent catch means there's no way to diagnose *why* it fell
+    // back — Render captures stdout/stderr regardless of logger, so a plain
+    // console.error is enough to make this visible without plumbing a
+    // logger instance through a plain lib module.
+    console.error("explainIssue: falling back to template.", err);
     return fallbackExplanation(input);
   }
 }
