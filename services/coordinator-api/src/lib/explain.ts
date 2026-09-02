@@ -173,7 +173,19 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
     // back — Render captures stdout/stderr regardless of logger, so a plain
     // console.error is enough to make this visible without plumbing a
     // logger instance through a plain lib module.
-    console.error("explainIssue: falling back to template.", err);
+    //
+    // The Anthropic SDK's APIConnectionError wraps the real network error in
+    // `.cause` (a plain console.error(err) doesn't reliably surface nested
+    // causes through Render's log viewer), so pull out name/code/message
+    // from both the error and its cause explicitly.
+    const cause = err instanceof Error ? (err.cause as Error | undefined) : undefined;
+    console.error("explainIssue: falling back to template.", {
+      name: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      causeName: cause?.name,
+      causeCode: (cause as { code?: string } | undefined)?.code,
+      causeMessage: cause?.message,
+    });
     return fallbackExplanation(input);
   }
 }
