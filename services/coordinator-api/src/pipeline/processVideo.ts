@@ -1,13 +1,20 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { requestHeadStability, CvServiceError } from "../lib/cvService.js";
-import { explainIssue } from "../lib/explain.js";
+import { requestBattingMeasurements, CvServiceError, type Measurement } from "../lib/cvService.js";
+import { explainIssue, type SecondaryMeasurementContext } from "../lib/explain.js";
 import { notFound } from "../lib/errors.js";
 import { markJob } from "./markJob.js";
-import { diagnose, HEAD_STABILITY_REFERENCE_RANGE } from "./diagnose.js";
+import {
+  evaluateCandidate,
+  selectPrimary,
+  writeIssue,
+  lookupRootCause,
+  referenceRangeFor,
+  type Candidate,
+} from "./diagnose.js";
 import { matchDrill } from "./matchDrill.js";
 
 const SIGNED_URL_EXPIRY_SECONDS = 300;
-const MEASUREMENT_FORMULA_VERSION = "head-stability-only-2026.08";
+const MEASUREMENT_FORMULA_VERSION = "head-stability-and-weight-transfer-2026.09";
 
 export interface ProcessVideoDeps {
   supabaseAdmin: SupabaseClient;
@@ -33,17 +40,19 @@ export type ProcessVideoResult =
  *
  * extract_frames and pose_estimate/measure don't map to three separate real
  * operations here — cv-service's one endpoint does frame extraction, pose
- * detection, and the measurement computation together. extract_frames is
- * marked succeeded as a thin proxy for that (noted, not pretended away);
- * pose_estimate and measure are marked succeeded together after the single
- * cv-service call returns. persist is a similar thin capstone, marked
- * succeeded once diagnose/explain/match_drill have all landed.
+ * detection, and both markers' measurement computation together in a
+ * single pass (avoids paying for pose estimation twice). extract_frames is
+ * marked succeeded as a thin proxy for that; pose_estimate and measure are
+ * marked succeeded together after the single cv-service call returns.
+ * persist is a similar thin capstone, marked succeeded once
+ * diagnose/explain/match_drill have all landed.
  *
- * diagnose/explain/match_drill only run against the one root cause that
- * maps to the one marker built (head_stability -> head_falling_away). If
- * diagnose finds no candidate confident enough to flag, that's a valid
- * outcome, not a failure — the pipeline still completes with no primary
- * issue.
+ * Two markers now exist (head_stability, balance_weight_transfer), so a
+ * video can have two candidate issues at once — diagnose picks exactly one
+ * primary (docs/08-coaching-engine.md §7's argmax), matching the DB's own
+ * `issues_one_primary_per_analysis` constraint. If neither candidate clears
+ * the confidence floor, that's a valid outcome, not a failure — the
+ * pipeline still completes with no primary issue.
  */
 export async function processVideo(
   deps: ProcessVideoDeps,
@@ -69,6 +78,20 @@ export async function processVideo(
   if (!video.storage_path) {
     return { status: "skipped", videoId, reason: "video has no storage_path" };
   }
+
+  // Fetched once, up front: batting_hand determines front/back-ankle
+  // assignment for weight_transfer (must be known before calling
+  // cv-service), and the same row is reused for explain's player context
+  // later rather than queried twice.
+  const { data: profile } = await supabaseAdmin
+    .from("profiles")
+    .select("age_band, batting_hand, playing_level")
+    .eq("id", video.player_id)
+    .maybeSingle();
+  const battingHand =
+    profile?.batting_hand === "left" || profile?.batting_hand === "right"
+      ? profile.batting_hand
+      : null;
 
   await markJob(supabaseAdmin, videoId, "validate", {
     status: "succeeded",
@@ -101,7 +124,7 @@ export async function processVideo(
 
   let result;
   try {
-    result = await requestHeadStability(cvServiceUrl, signed.signedUrl);
+    result = await requestBattingMeasurements(cvServiceUrl, signed.signedUrl, battingHand);
   } catch (err) {
     const message =
       err instanceof CvServiceError
@@ -147,27 +170,46 @@ export async function processVideo(
     return { status: "failed", videoId, stage: "measure", error: message };
   }
 
-  const { data: measurement, error: measurementError } = await supabaseAdmin
-    .from("measurements")
-    .insert({
-      analysis_id: analysis.id,
-      marker_key: "head_stability",
-      value: result.value,
-      unit: result.unit,
-      confidence: result.confidence,
-    })
-    .select("id")
-    .single();
+  const measurementsToWrite: Array<{ markerKey: string; measurement: Measurement }> = [
+    { markerKey: "head_stability", measurement: result.headStability },
+  ];
+  if (result.weightTransfer) {
+    measurementsToWrite.push({ markerKey: "balance_weight_transfer", measurement: result.weightTransfer });
+  }
 
-  if (measurementError || !measurement) {
-    const message = measurementError?.message ?? "Could not create the measurement record.";
-    await markJob(supabaseAdmin, videoId, "measure", {
-      status: "failed",
-      error: message,
-      completed_at: new Date().toISOString(),
+  const candidates: Candidate[] = [];
+  for (const { markerKey, measurement } of measurementsToWrite) {
+    const { data: measurementRow, error: measurementError } = await supabaseAdmin
+      .from("measurements")
+      .insert({
+        analysis_id: analysis.id,
+        marker_key: markerKey,
+        value: measurement.value,
+        unit: measurement.unit,
+        confidence: measurement.confidence,
+      })
+      .select("id")
+      .single();
+
+    if (measurementError || !measurementRow) {
+      const message = measurementError?.message ?? "Could not create the measurement record.";
+      await markJob(supabaseAdmin, videoId, "measure", {
+        status: "failed",
+        error: message,
+        completed_at: new Date().toISOString(),
+      });
+      await supabaseAdmin.from("videos").update({ status: "failed" }).eq("id", videoId);
+      return { status: "failed", videoId, stage: "measure", error: message };
+    }
+
+    const candidate = evaluateCandidate({
+      measurementId: measurementRow.id,
+      markerKey,
+      value: measurement.value,
+      unit: measurement.unit,
+      confidence: measurement.confidence,
     });
-    await supabaseAdmin.from("videos").update({ status: "failed" }).eq("id", videoId);
-    return { status: "failed", videoId, stage: "measure", error: message };
+    if (candidate) candidates.push(candidate);
   }
 
   await markJob(supabaseAdmin, videoId, "measure", {
@@ -182,14 +224,8 @@ export async function processVideo(
 
   let diagnosis;
   try {
-    diagnosis = await diagnose(supabaseAdmin, {
-      analysisId: analysis.id,
-      measurementId: measurement.id,
-      markerKey: "head_stability",
-      value: result.value,
-      unit: result.unit,
-      confidence: result.confidence,
-    });
+    const primary = selectPrimary(candidates);
+    diagnosis = primary ? await writeIssue(supabaseAdmin, analysis.id, primary) : null;
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown diagnose error";
     await markJob(supabaseAdmin, videoId, "diagnose", {
@@ -214,26 +250,40 @@ export async function processVideo(
 
     let explanationText: string;
     try {
-      const { data: profile } = await supabaseAdmin
-        .from("profiles")
-        .select("age_band, batting_hand, playing_level")
-        .eq("id", video.player_id)
-        .maybeSingle();
+      // Any OTHER candidate besides the selected primary — a second marker
+      // that also cleared the candidate floor but wasn't chosen — becomes
+      // optional context explain may (not must) connect to the primary.
+      const secondaryCandidate = candidates.find((c) => c.markerKey !== diagnosis.markerKey) ?? null;
+
+      let secondaryMeasurement: SecondaryMeasurementContext | undefined;
+      if (secondaryCandidate) {
+        const secondaryRootCause = await lookupRootCause(supabaseAdmin, secondaryCandidate.rootCauseKey);
+        secondaryMeasurement = {
+          markerKey: secondaryCandidate.markerKey,
+          value: secondaryCandidate.value,
+          unit: secondaryCandidate.unit,
+          rootCauseKey: secondaryCandidate.rootCauseKey,
+          rootCauseDescription: secondaryRootCause.description,
+        };
+      }
+
+      const referenceRange = referenceRangeFor(diagnosis.markerKey) ?? [0, 0];
 
       explanationText = await explainIssue(anthropicApiKey, {
         rootCauseKey: diagnosis.rootCauseKey,
         rootCauseDescription: diagnosis.rootCauseDescription,
-        markerKey: "head_stability",
-        value: result.value,
-        unit: result.unit,
-        referenceRange: HEAD_STABILITY_REFERENCE_RANGE,
+        markerKey: diagnosis.markerKey,
+        value: diagnosis.value,
+        unit: diagnosis.unit,
+        referenceRange,
         severity: diagnosis.severity,
-        confidence: result.confidence,
+        confidence: diagnosis.confidence,
         player: {
           ageBand: profile?.age_band ?? null,
           battingHand: profile?.batting_hand ?? null,
           playingLevel: profile?.playing_level ?? null,
         },
+        secondaryMeasurement,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown explain error";
@@ -289,8 +339,8 @@ export async function processVideo(
   return {
     status: "processed",
     videoId,
-    measurementValue: result.value,
-    confidence: result.confidence,
+    measurementValue: result.headStability.value,
+    confidence: result.headStability.confidence,
     primaryIssueId: diagnosis?.issueId ?? null,
   };
 }

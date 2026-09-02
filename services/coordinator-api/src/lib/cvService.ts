@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const headStabilityResponseSchema = z.object({
+const measurementSchema = z.object({
   value: z.number(),
   unit: z.string(),
   confidence: z.number(),
@@ -8,7 +8,14 @@ const headStabilityResponseSchema = z.object({
   framesWithDetection: z.number(),
 });
 
-export type HeadStabilityResult = z.infer<typeof headStabilityResponseSchema>;
+const battingMeasurementsResponseSchema = z.object({
+  headStability: measurementSchema,
+  weightTransfer: measurementSchema.nullable(),
+  weightTransferSkipReason: z.string().nullable(),
+});
+
+export type Measurement = z.infer<typeof measurementSchema>;
+export type BattingMeasurementsResult = z.infer<typeof battingMeasurementsResponseSchema>;
 
 export class CvServiceError extends Error {
   readonly status: number;
@@ -23,17 +30,23 @@ export class CvServiceError extends Error {
 }
 
 /**
- * Calls the cv-service's single-marker head-stability endpoint. Stateless on
+ * Calls cv-service's combined batting-measurements endpoint. Stateless on
  * both ends — cv-service downloads the video itself from the signed URL.
+ * One call, one pose-estimation pass: cv-service always returns
+ * head_stability, and returns weight_transfer only when battingHand was
+ * given and ankles were detected confidently enough (weightTransfer is
+ * null otherwise — a valid outcome, not an error, see
+ * weightTransferSkipReason).
  */
-export async function requestHeadStability(
+export async function requestBattingMeasurements(
   cvServiceUrl: string,
   videoUrl: string,
-): Promise<HeadStabilityResult> {
-  const response = await fetch(`${cvServiceUrl}/measurements/head-stability`, {
+  battingHand: "left" | "right" | null,
+): Promise<BattingMeasurementsResult> {
+  const response = await fetch(`${cvServiceUrl}/measurements/batting`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video_url: videoUrl }),
+    body: JSON.stringify({ video_url: videoUrl, batting_hand: battingHand }),
   });
 
   const body: unknown = await response.json();
@@ -41,5 +54,5 @@ export async function requestHeadStability(
     throw new CvServiceError(response.status, body);
   }
 
-  return headStabilityResponseSchema.parse(body);
+  return battingMeasurementsResponseSchema.parse(body);
 }
