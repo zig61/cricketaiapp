@@ -6,12 +6,14 @@ import { createClient } from "@/lib/supabase/client";
 import { toUserMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/Button";
 import { DEMO_VIDEO_ID } from "@/lib/demo-constants";
+import { CameraCalibration } from "./CameraCalibration";
 
 type Step = "idle" | "requesting" | "uploading" | "confirming" | "done";
+type Mode = "choose" | "camera";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function getVideoDuration(file: File): Promise<number> {
+function getVideoDuration(file: File | Blob): Promise<number> {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");
     video.preload = "metadata";
@@ -27,38 +29,14 @@ function getVideoDuration(file: File): Promise<number> {
 export function UploadForm({ demo = false }: { demo?: boolean }) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<Mode>("choose");
   const [step, setStep] = useState<Step>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  async function handleFileSelected(file: File) {
+  async function uploadVideoFile(file: File | Blob, extension: string) {
     setError(null);
-
-    if (!/\.(mp4|mov|m4v)$/i.test(file.name)) {
-      setError("Please choose an MP4 or MOV video file.");
-      return;
-    }
-    if (file.size > 500 * 1024 * 1024) {
-      setError("That video is larger than the 500MB limit.");
-      return;
-    }
-
-    if (demo) {
-      // No real backend in demo mode — simulate the same step sequence so
-      // the flow looks and feels real, then land on the fixed demo result.
-      setStep("requesting");
-      await sleep(500);
-      setStep("uploading");
-      await sleep(900);
-      setStep("confirming");
-      await sleep(500);
-      setStep("done");
-      router.push(`/videos/${DEMO_VIDEO_ID}`);
-      return;
-    }
-
     try {
       setStep("requesting");
-      const extension = file.name.split(".").pop() ?? "mp4";
       const createRes = await fetch("/api/videos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -97,6 +75,57 @@ export function UploadForm({ demo = false }: { demo?: boolean }) {
     }
   }
 
+  async function handleFileSelected(file: File) {
+    setError(null);
+
+    if (!/\.(mp4|mov|m4v)$/i.test(file.name)) {
+      setError("Please choose an MP4 or MOV video file.");
+      return;
+    }
+    if (file.size > 500 * 1024 * 1024) {
+      setError("That video is larger than the 500MB limit.");
+      return;
+    }
+
+    if (demo) {
+      // No real backend in demo mode — simulate the same step sequence so
+      // the flow looks and feels real, then land on the fixed demo result.
+      setStep("requesting");
+      await sleep(500);
+      setStep("uploading");
+      await sleep(900);
+      setStep("confirming");
+      await sleep(500);
+      setStep("done");
+      router.push(`/videos/${DEMO_VIDEO_ID}`);
+      return;
+    }
+
+    const extension = file.name.split(".").pop() ?? "mp4";
+    await uploadVideoFile(file, extension);
+  }
+
+  async function handleRecorded(blob: Blob) {
+    setMode("choose");
+    if (demo) {
+      setStep("requesting");
+      await sleep(500);
+      setStep("uploading");
+      await sleep(900);
+      setStep("confirming");
+      await sleep(500);
+      setStep("done");
+      router.push(`/videos/${DEMO_VIDEO_ID}`);
+      return;
+    }
+    await uploadVideoFile(blob, "webm");
+  }
+
+  function handleCameraUnavailable(reason: string) {
+    setMode("choose");
+    setError(`${reason} You can still choose a video file instead.`);
+  }
+
   const stepLabel: Record<Step, string | null> = {
     idle: null,
     requesting: "Preparing upload...",
@@ -104,6 +133,21 @@ export function UploadForm({ demo = false }: { demo?: boolean }) {
     confirming: "Confirming...",
     done: "Done — redirecting...",
   };
+
+  if (mode === "camera" && step === "idle") {
+    return (
+      <div>
+        <CameraCalibration onRecorded={handleRecorded} onUnavailable={handleCameraUnavailable} />
+        <button
+          type="button"
+          onClick={() => setMode("choose")}
+          className="mt-3 text-sm text-[var(--muted)] underline"
+        >
+          Cancel and choose a file instead
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="surface-card glow-accent rounded-2xl p-8 text-center">
@@ -125,14 +169,16 @@ export function UploadForm({ demo = false }: { demo?: boolean }) {
         }}
       />
 
-      <Button
-        type="button"
-        className="mx-auto mt-6"
-        disabled={step !== "idle"}
-        onClick={() => fileInputRef.current?.click()}
-      >
-        {stepLabel[step] ?? "Choose video"}
-      </Button>
+      <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+        <Button type="button" disabled={step !== "idle"} onClick={() => fileInputRef.current?.click()}>
+          {stepLabel[step] ?? "Choose video"}
+        </Button>
+        {step === "idle" ? (
+          <Button type="button" variant="secondary" onClick={() => setMode("camera")}>
+            Record in-app
+          </Button>
+        ) : null}
+      </div>
 
       {error ? <p className="mt-4 text-sm text-[var(--critical)]">{error}</p> : null}
     </div>

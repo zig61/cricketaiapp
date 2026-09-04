@@ -3,7 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import type { VideoKind } from "@/lib/database.types";
 
 const ALLOWED_KINDS: VideoKind[] = ["initial", "followup"];
-const ALLOWED_EXTENSIONS = ["mp4", "mov", "m4v"];
+// webm added for in-app recordings (CameraCalibration.tsx uses
+// MediaRecorder, which only produces webm in browsers that support it —
+// without this, recordings would silently fall back to being labeled
+// .mp4 despite being webm-encoded content).
+const ALLOWED_EXTENSIONS = ["mp4", "mov", "m4v", "webm"];
 
 function errorResponse(status: number, code: string, message: string) {
   return NextResponse.json({ error: { code, message } }, { status });
