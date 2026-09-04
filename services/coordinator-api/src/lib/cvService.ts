@@ -8,10 +8,26 @@ const measurementSchema = z.object({
   framesWithDetection: z.number(),
 });
 
+// Always present, even when weightTransfer succeeds — lets a null result
+// be debugged (ankles never detected vs. detected but just below the
+// confidence bar, vs. an implausibly narrow stance width) without
+// re-running anything against the live service.
+const weightTransferDiagnosticsSchema = z.object({
+  totalSampledFrames: z.number(),
+  framesWithHipsOk: z.number(),
+  framesWithFrontAnkleOk: z.number(),
+  framesWithBackAnkleOk: z.number(),
+  framesWithBothAnklesOk: z.number(),
+  meanFrontAnkleVisibility: z.number(),
+  meanBackAnkleVisibility: z.number(),
+  baselineBaseWidthM: z.number().nullable(),
+});
+
 const battingMeasurementsResponseSchema = z.object({
   headStability: measurementSchema,
   weightTransfer: measurementSchema.nullable(),
   weightTransferSkipReason: z.string().nullable(),
+  weightTransferDiagnostics: weightTransferDiagnosticsSchema.nullable(),
 });
 
 export type Measurement = z.infer<typeof measurementSchema>;

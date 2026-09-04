@@ -103,10 +103,28 @@ class WeightTransferResult:
 
 
 @dataclass
+class WeightTransferDiagnostics:
+    """Always computed, regardless of whether weight_transfer succeeds —
+    lets a null result be debugged (is it "ankles almost never detected"
+    or "detected but just below the confidence bar"?) without re-running
+    anything, instead of a single opaque skip reason."""
+
+    total_sampled_frames: int
+    frames_with_hips_ok: int
+    frames_with_front_ankle_ok: int
+    frames_with_back_ankle_ok: int
+    frames_with_both_ankles_ok: int
+    mean_front_ankle_visibility: float
+    mean_back_ankle_visibility: float
+    baseline_base_width_m: float | None
+
+
+@dataclass
 class BattingAnalysisResult:
     head_stability: HeadStabilityResult
     weight_transfer: WeightTransferResult | None
     weight_transfer_skip_reason: str | None
+    weight_transfer_diagnostics: WeightTransferDiagnostics | None
 
 
 def _sample_frame_indices(total_frames: int, source_fps: float) -> list[int]:
@@ -252,7 +270,7 @@ def _front_back_attrs(batting_hand: str) -> tuple[str, str]:
 
 def compute_weight_transfer_from_samples(
     samples: list[FrameSample], batting_hand: str
-) -> WeightTransferResult | None:
+) -> tuple[WeightTransferResult | None, WeightTransferDiagnostics]:
     """Pure landmark-driven computation — no video/MediaPipe involved, so
     this is directly unit-testable with hand-built FrameSample sequences.
 
@@ -267,10 +285,13 @@ def compute_weight_transfer_from_samples(
     doesn't matter which side of the frame is which, only which named
     landmark (front vs back, from batting_hand) is on which side.
 
-    Returns None if too few frames have both hips and the relevant ankle
-    pair visible — a valid "not enough evidence for this marker" outcome,
-    not an error, since head_stability may still have succeeded from the
-    same video.
+    Returns (None, diagnostics) if too few frames have both hips and the
+    relevant ankle pair visible — a valid "not enough evidence for this
+    marker" outcome, not an error, since head_stability may still have
+    succeeded from the same video. diagnostics is always populated (even
+    on success) so a null result can be debugged without re-running
+    anything — e.g. distinguishing "ankles almost never detected" from
+    "detected, but just below the confidence bar."
     """
     front, back = _front_back_attrs(batting_hand)
 
@@ -279,6 +300,16 @@ def compute_weight_transfer_from_samples(
 
     def ankle_visibility(s: FrameSample, side: str) -> float:
         return s.left_ankle_visibility if side == "left" else s.right_ankle_visibility
+
+    frames_with_hips_ok = sum(1 for s in samples if s.hips_ok)
+    frames_with_front_ankle_ok = sum(1 for s in samples if ankle_visibility(s, front) > LANDMARK_MIN_SCORE)
+    frames_with_back_ankle_ok = sum(1 for s in samples if ankle_visibility(s, back) > LANDMARK_MIN_SCORE)
+    mean_front_ankle_visibility = (
+        sum(ankle_visibility(s, front) for s in samples) / len(samples) if samples else 0.0
+    )
+    mean_back_ankle_visibility = (
+        sum(ankle_visibility(s, back) for s in samples) / len(samples) if samples else 0.0
+    )
 
     valid = [
         s
@@ -289,7 +320,16 @@ def compute_weight_transfer_from_samples(
     ]
 
     if len(valid) < MIN_VALID_FRAMES:
-        return None
+        return None, WeightTransferDiagnostics(
+            total_sampled_frames=len(samples),
+            frames_with_hips_ok=frames_with_hips_ok,
+            frames_with_front_ankle_ok=frames_with_front_ankle_ok,
+            frames_with_back_ankle_ok=frames_with_back_ankle_ok,
+            frames_with_both_ankles_ok=len(valid),
+            mean_front_ankle_visibility=round(mean_front_ankle_visibility, 3),
+            mean_back_ankle_visibility=round(mean_back_ankle_visibility, 3),
+            baseline_base_width_m=None,
+        )
 
     # The base of support is established once, in stance, and held fixed —
     # NOT recomputed per frame. Using each frame's own live ankle positions
@@ -304,13 +344,24 @@ def compute_weight_transfer_from_samples(
     baseline_back_x = sum(ankle_x(s, back) for s in valid[:baseline_count]) / baseline_count
     baseline_base_width = abs(baseline_front_x - baseline_back_x)
 
+    diagnostics = WeightTransferDiagnostics(
+        total_sampled_frames=len(samples),
+        frames_with_hips_ok=frames_with_hips_ok,
+        frames_with_front_ankle_ok=frames_with_front_ankle_ok,
+        frames_with_back_ankle_ok=frames_with_back_ankle_ok,
+        frames_with_both_ankles_ok=len(valid),
+        mean_front_ankle_visibility=round(mean_front_ankle_visibility, 3),
+        mean_back_ankle_visibility=round(mean_back_ankle_visibility, 3),
+        baseline_base_width_m=round(baseline_base_width, 4),
+    )
+
     # A real cricket stance is normally tens of centimeters wide at the
     # ankles; anything under 5cm indicates an unreliable stance detection
     # (motion blur, occlusion, or a camera angle too close to face-on for
-    # this measurement), not a real narrow-based stance.
+    # this measurement), not a real narrow stance.
     MIN_RELIABLE_BASE_WIDTH_M = 0.05
     if baseline_base_width < MIN_RELIABLE_BASE_WIDTH_M:
-        return None
+        return None, diagnostics
 
     def percent_of_base(s: FrameSample) -> float:
         return (s.hip_mid_x - baseline_back_x) / (baseline_front_x - baseline_back_x) * 100
@@ -327,15 +378,20 @@ def compute_weight_transfer_from_samples(
         for s in valid
     ) / len(valid)
 
-    return WeightTransferResult(
-        value_percent=round(peak_percent, 2),
-        confidence=round(mean_confidence, 3),
-        frame_count=len(samples),
-        frames_with_detection=len(valid),
+    return (
+        WeightTransferResult(
+            value_percent=round(peak_percent, 2),
+            confidence=round(mean_confidence, 3),
+            frame_count=len(samples),
+            frames_with_detection=len(valid),
+        ),
+        diagnostics,
     )
 
 
-def compute_weight_transfer(video_path: str, batting_hand: str) -> WeightTransferResult | None:
+def compute_weight_transfer(
+    video_path: str, batting_hand: str
+) -> tuple[WeightTransferResult | None, WeightTransferDiagnostics]:
     """Video-driving wrapper mirroring compute_head_stability's shape."""
     samples, _frame_count = _run_pose_detection(video_path)
     return compute_weight_transfer_from_samples(samples, batting_hand)
@@ -358,12 +414,14 @@ def analyze_batting_video(
             head_stability=head_stability,
             weight_transfer=None,
             weight_transfer_skip_reason="batting_hand not provided",
+            weight_transfer_diagnostics=None,
         )
 
-    weight_transfer = compute_weight_transfer_from_samples(samples, batting_hand)
+    weight_transfer, diagnostics = compute_weight_transfer_from_samples(samples, batting_hand)
     return BattingAnalysisResult(
         head_stability=head_stability,
         weight_transfer=weight_transfer,
+        weight_transfer_diagnostics=diagnostics,
         weight_transfer_skip_reason=(
             None if weight_transfer is not None else "insufficient ankle detection"
         ),

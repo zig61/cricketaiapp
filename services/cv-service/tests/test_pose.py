@@ -80,11 +80,13 @@ def test_balanced_controlled_shot_peaks_around_75_percent():
         _sample(0.10),
     ]
 
-    result = compute_weight_transfer_from_samples(samples, "right")
+    result, diagnostics = compute_weight_transfer_from_samples(samples, "right")
 
     assert result is not None
     assert result.value_percent == pytest.approx(75.0, abs=0.1)
     assert result.frames_with_detection == len(samples)
+    assert diagnostics.frames_with_both_ankles_ok == len(samples)
+    assert diagnostics.baseline_base_width_m == pytest.approx(0.3, abs=0.001)
 
 
 def test_insufficient_transfer_stuck_on_back_foot_peaks_around_30_percent():
@@ -98,7 +100,7 @@ def test_insufficient_transfer_stuck_on_back_foot_peaks_around_30_percent():
         _sample(0.23),
     ]
 
-    result = compute_weight_transfer_from_samples(samples, "right")
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "right")
 
     assert result is not None
     assert result.value_percent == pytest.approx(30.0, abs=0.1)
@@ -115,7 +117,7 @@ def test_overbalanced_shot_peaks_above_100_percent():
         _sample(0.02),
     ]
 
-    result = compute_weight_transfer_from_samples(samples, "right")
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "right")
 
     assert result is not None
     assert result.value_percent == pytest.approx(120.0, abs=0.1)
@@ -129,7 +131,7 @@ def test_left_hand_batter_swaps_front_and_back_ankle():
     # toward the BACK foot, i.e. away from a good transfer, not toward one.
     samples = [_sample(0.28), _sample(0.20), _sample(0.075), _sample(0.10), _sample(0.15)]
 
-    result = compute_weight_transfer_from_samples(samples, "left")
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "left")
 
     assert result is not None
     # percent_of_base = (hip_mid_x - back_ankle_x) / (front_ankle_x - back_ankle_x) * 100
@@ -155,9 +157,18 @@ def test_returns_none_when_ankles_are_not_visibly_detected():
         for _ in range(10)
     ]
 
-    result = compute_weight_transfer_from_samples(low_vis_samples, "right")
+    result, diagnostics = compute_weight_transfer_from_samples(low_vis_samples, "right")
 
     assert result is None
+    # This is exactly the distinction the diagnostics exist to make visible:
+    # ankles were never confidently detected at all (0/10), not "detected
+    # but just below the bar" — and no baseline could be computed as a result.
+    assert diagnostics.total_sampled_frames == 10
+    assert diagnostics.frames_with_front_ankle_ok == 0
+    assert diagnostics.frames_with_back_ankle_ok == 0
+    assert diagnostics.frames_with_both_ankles_ok == 0
+    assert diagnostics.mean_front_ankle_visibility == pytest.approx(0.1, abs=0.001)
+    assert diagnostics.baseline_base_width_m is None
 
 
 def test_raises_on_an_invalid_batting_hand():
@@ -196,7 +207,7 @@ def test_a_single_noisy_frame_does_not_blow_up_the_result():
         _sample(0.10),
     ]
 
-    result = compute_weight_transfer_from_samples(samples, "right")
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "right")
 
     assert result is not None
     assert result.value_percent == pytest.approx(75.0, abs=0.5)
@@ -208,6 +219,11 @@ def test_returns_none_when_the_stance_base_width_is_implausibly_narrow():
     # this is treated as an unreliable detection, not a real narrow stance.
     samples = [_sample(0.01, left_ankle_x=0.0, right_ankle_x=0.02) for _ in range(6)]
 
-    result = compute_weight_transfer_from_samples(samples, "right")
+    result, diagnostics = compute_weight_transfer_from_samples(samples, "right")
 
     assert result is None
+    # Diagnostics still show ankles WERE detected (visibility is fine) —
+    # this is what distinguishes "narrow base width" from "no detection at
+    # all" (the previous test), which look identical from skip reason alone.
+    assert diagnostics.frames_with_both_ankles_ok == 6
+    assert diagnostics.baseline_base_width_m == pytest.approx(0.02, abs=0.001)

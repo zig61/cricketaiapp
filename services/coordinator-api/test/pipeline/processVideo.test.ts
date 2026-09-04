@@ -38,6 +38,19 @@ function battingResponse(overrides: {
             ...overrides.weightTransfer,
           },
     weightTransferSkipReason: overrides.weightTransfer === null ? "batting_hand not provided" : null,
+    weightTransferDiagnostics:
+      overrides.weightTransfer === null
+        ? null
+        : {
+            totalSampledFrames: 24,
+            framesWithHipsOk: 24,
+            framesWithFrontAnkleOk: 22,
+            framesWithBackAnkleOk: 22,
+            framesWithBothAnklesOk: 22,
+            meanFrontAnkleVisibility: 0.9,
+            meanBackAnkleVisibility: 0.9,
+            baselineBaseWidthM: 0.3,
+          },
   };
 }
 

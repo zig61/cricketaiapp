@@ -108,4 +108,18 @@ def batting_measurements(body: BattingMeasurementsRequest) -> dict:
             else None
         ),
         "weightTransferSkipReason": result.weight_transfer_skip_reason,
+        "weightTransferDiagnostics": (
+            {
+                "totalSampledFrames": result.weight_transfer_diagnostics.total_sampled_frames,
+                "framesWithHipsOk": result.weight_transfer_diagnostics.frames_with_hips_ok,
+                "framesWithFrontAnkleOk": result.weight_transfer_diagnostics.frames_with_front_ankle_ok,
+                "framesWithBackAnkleOk": result.weight_transfer_diagnostics.frames_with_back_ankle_ok,
+                "framesWithBothAnklesOk": result.weight_transfer_diagnostics.frames_with_both_ankles_ok,
+                "meanFrontAnkleVisibility": result.weight_transfer_diagnostics.mean_front_ankle_visibility,
+                "meanBackAnkleVisibility": result.weight_transfer_diagnostics.mean_back_ankle_visibility,
+                "baselineBaseWidthM": result.weight_transfer_diagnostics.baseline_base_width_m,
+            }
+            if result.weight_transfer_diagnostics is not None
+            else None
+        ),
     }

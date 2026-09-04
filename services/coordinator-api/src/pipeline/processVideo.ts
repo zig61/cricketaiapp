@@ -145,6 +145,20 @@ export async function processVideo(
     status: "succeeded",
     completed_at: new Date().toISOString(),
   });
+
+  if (!result.weightTransfer && battingHand) {
+    // battingHand was known but weight_transfer still came back null —
+    // worth a visible log line rather than a silently skipped marker, so a
+    // pattern of real users hitting this doesn't require manually calling
+    // cv-service directly each time to see why (same reasoning as
+    // explain.ts's fallback logging).
+    console.warn("processVideo: weight_transfer skipped.", {
+      videoId,
+      reason: result.weightTransferSkipReason,
+      diagnostics: result.weightTransferDiagnostics,
+    });
+  }
+
   await markJob(supabaseAdmin, videoId, "measure", {
     status: "running",
     started_at: new Date().toISOString(),
