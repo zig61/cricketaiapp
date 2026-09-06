@@ -38,19 +38,46 @@ describe("weakestComponent", () => {
 });
 
 describe("lowConfidenceNote", () => {
-  it("gives camera-angle guidance when geometry is the weak link", () => {
-    const note = lowConfidenceNote(breakdown({ geometryScore: 0.2, overallScore: 0.2 }));
-    expect(note).toContain("camera");
-    expect(note).toContain("angle");
+  // Regression test for a real bug found via live verification (2026-09-06):
+  // a real video's compressed camera angle dropped BOTH markers' geometry
+  // scores, and the first version of this function used weight_transfer's
+  // "look across your feet" wording on a head_stability measurement --
+  // same root cause, wrong marker's wording. Each marker needs its own
+  // geometry message; consistency/visibility stay marker-agnostic.
+
+  it("gives weight_transfer-specific stance-angle guidance for its own geometry failure", () => {
+    const note = lowConfidenceNote(
+      "balance_weight_transfer",
+      breakdown({ geometryScore: 0.2, overallScore: 0.2 }),
+    );
+    expect(note).toContain("across your feet");
   });
 
-  it("gives stay-in-frame guidance when consistency is the weak link", () => {
-    const note = lowConfidenceNote(breakdown({ consistencyScore: 0.2, overallScore: 0.2 }));
+  it("gives head_stability-specific guidance for its own geometry failure -- NOT the weight_transfer wording", () => {
+    const note = lowConfidenceNote("head_stability", breakdown({ geometryScore: 0.2, overallScore: 0.2 }));
+    expect(note).not.toContain("across your feet");
+    expect(note.toLowerCase()).toContain("head movement");
+  });
+
+  it("falls back to a generic geometry message for an unknown marker rather than guessing wrong", () => {
+    const note = lowConfidenceNote("some_future_marker", breakdown({ geometryScore: 0.2, overallScore: 0.2 }));
+    expect(note).not.toContain("across your feet");
+    expect(note).toContain("camera angle");
+  });
+
+  it("gives stay-in-frame guidance when consistency is the weak link, regardless of marker", () => {
+    const note = lowConfidenceNote(
+      "head_stability",
+      breakdown({ consistencyScore: 0.2, overallScore: 0.2 }),
+    );
     expect(note).toContain("lost track");
   });
 
-  it("gives visibility/lighting guidance when visibility is the weak link", () => {
-    const note = lowConfidenceNote(breakdown({ visibilityScore: 0.2, overallScore: 0.2 }));
+  it("gives visibility/lighting guidance when visibility is the weak link, regardless of marker", () => {
+    const note = lowConfidenceNote(
+      "balance_weight_transfer",
+      breakdown({ visibilityScore: 0.2, overallScore: 0.2 }),
+    );
     expect(note).toContain("couldn't see you clearly");
   });
 });

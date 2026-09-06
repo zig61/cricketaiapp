@@ -215,7 +215,8 @@ export async function processVideo(
         // attach to (see evaluateCandidate below); this is the only place
         // the player learns *why*, applied regardless of whether the raw
         // value happened to look like an issue or look fine.
-        confidence_note: level === "low" ? lowConfidenceNote(measurement.confidenceBreakdown) : null,
+        confidence_note:
+          level === "low" ? lowConfidenceNote(markerKey, measurement.confidenceBreakdown) : null,
       })
       .select("id")
       .single();
