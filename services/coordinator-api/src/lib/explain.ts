@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import { MEDIUM_CONFIDENCE_CAVEAT } from "./confidence.js";
 
 const EXPLANATION_MODEL = "claude-sonnet-5";
 
@@ -127,6 +128,15 @@ export interface ExplainInput {
     playingLevel: string | null;
   };
   secondaryMeasurement?: SecondaryMeasurementContext;
+  /**
+   * The primary issue's confidence level (see pose.py's classify_confidence
+   * / the 2026-09-06 confidence-gating plan). "low" should never actually
+   * reach explainIssue in practice — a LOW-confidence measurement is
+   * already excluded from becoming a diagnose candidate before explain is
+   * ever called — but the type stays honest about all three rather than
+   * silently assuming the caller enforced that.
+   */
+  confidenceLevel: "high" | "medium" | "low";
 }
 
 function fallbackExplanation(input: ExplainInput): string {
@@ -139,6 +149,18 @@ function fallbackExplanation(input: ExplainInput): string {
 
 function composeExplanation(parsed: z.infer<typeof explanationSchema>): string {
   return [parsed.observation, parsed.cause, parsed.consequence, parsed.correction].join(" ");
+}
+
+/**
+ * Applied to whatever explainIssue is about to return — Claude-generated
+ * or the deterministic fallback alike — rather than only one path, so a
+ * MEDIUM-confidence result always carries the caveat regardless of
+ * whether the LLM call itself succeeded. Appended in code, not left to
+ * the LLM's own prompt-following, for the same reason the out-of-scope
+ * guard exists: an instruction is encouragement, not a guarantee.
+ */
+function applyConfidenceCaveat(text: string, confidenceLevel: ExplainInput["confidenceLevel"]): string {
+  return confidenceLevel === "medium" ? `${text} ${MEDIUM_CONFIDENCE_CAVEAT}` : text;
 }
 
 /**
@@ -237,7 +259,7 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
       throw new Error("Model output referenced a marker outside this call's scope; discarding in favor of fallback.");
     }
 
-    return composed;
+    return applyConfidenceCaveat(composed, input.confidenceLevel);
   } catch (err) {
     // Never let an explain failure fail the pipeline stage (see docstring),
     // but a silent catch means there's no way to diagnose *why* it fell
@@ -257,6 +279,6 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
       causeCode: (cause as { code?: string } | undefined)?.code,
       causeMessage: cause?.message,
     });
-    return fallbackExplanation(input);
+    return applyConfidenceCaveat(fallbackExplanation(input), input.confidenceLevel);
   }
 }

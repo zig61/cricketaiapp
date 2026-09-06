@@ -32,7 +32,12 @@ interface ViewModel {
   status: string;
   rejectionReason: string | null;
   primaryIssue: { explanationText: string | null } | null;
-  measurements: { markerKey: string; value: string; confidence: number }[];
+  measurements: {
+    markerKey: string;
+    value: string;
+    confidence: number;
+    confidenceNote?: string | null;
+  }[];
   drill: { title: string; difficulty: string; steps: string[] } | null;
 }
 
@@ -124,6 +129,7 @@ export default async function VideoDetailPage({
         markerKey: m.marker_key.replace(/_/g, " "),
         value: `${m.value} ${m.unit}`,
         confidence: m.confidence,
+        confidenceNote: m.confidence_note,
       }));
     }
   }
@@ -212,6 +218,9 @@ function VideoView({ model }: { model: ViewModel }) {
                 <p className="mt-1 text-xs text-[var(--muted-2)]">
                   {Math.round(m.confidence * 100)}% confidence
                 </p>
+                {m.confidenceNote ? (
+                  <p className="mt-2 text-xs text-[var(--warning)]">{m.confidenceNote}</p>
+                ) : null}
               </div>
             ))}
           </div>

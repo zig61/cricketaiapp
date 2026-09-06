@@ -19,6 +19,7 @@ const HEAD_STABILITY_INPUT = {
   referenceRange: [0, 5] as const,
   severity: 0.58,
   confidence: 0.999,
+  confidenceLevel: "high" as const,
   player: { ageBand: "13_17", battingHand: "right", playingLevel: "junior_club" },
 };
 
@@ -31,6 +32,7 @@ const WEIGHT_TRANSFER_INPUT = {
   referenceRange: [55, 100] as const,
   severity: 0.6,
   confidence: 0.95,
+  confidenceLevel: "high" as const,
   player: { ageBand: "13_17", battingHand: "right", playingLevel: "junior_club" },
 };
 
@@ -170,5 +172,42 @@ describe("explainIssue", () => {
     const text = await explainIssue("test-key", HEAD_STABILITY_INPUT);
 
     expect(text).toContain(HEAD_STABILITY_INPUT.rootCauseDescription);
+  });
+
+  // --- confidence-gating (2026-09-06): the MEDIUM caveat is applied deterministically
+  // in code, not left to the LLM to remember -- tested on both the Claude-success path
+  // and the fallback-template path, since it must apply to whichever text is returned.
+
+  it("appends the deterministic MEDIUM caveat to a real Claude response", async () => {
+    mockCreate.mockResolvedValue(
+      toolResponse({
+        observation: "Your head drifted noticeably during the shot.",
+        cause: "Your head comes off line before your front foot settles.",
+        consequence: "This costs you control through the off side.",
+        correction: "Keep your head still until the bat meets the ball.",
+      }),
+    );
+
+    const text = await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "medium" });
+
+    expect(text).toContain("Keep your head still until the bat meets the ball.");
+    expect(text).toContain("moderate confidence");
+  });
+
+  it("appends the deterministic MEDIUM caveat to the fallback template too", async () => {
+    mockCreate.mockRejectedValue(new Error("network error"));
+
+    const text = await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "medium" });
+
+    expect(text).toContain(HEAD_STABILITY_INPUT.rootCauseDescription);
+    expect(text).toContain("moderate confidence");
+  });
+
+  it("does not append any caveat for a HIGH-confidence result", async () => {
+    mockCreate.mockRejectedValue(new Error("network error"));
+
+    const text = await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "high" });
+
+    expect(text).not.toContain("moderate confidence");
   });
 });

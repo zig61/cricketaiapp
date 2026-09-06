@@ -44,6 +44,22 @@ MAX_SAMPLED_FRAMES = 90
 BASELINE_FRACTION = 0.1  # first 10% of valid frames define the stance baseline
 LANDMARK_MIN_SCORE = 0.5
 
+# Part 3 (confidence gating plan, 2026-09-06): if nothing at all has been
+# detected after this many attempted samples, neither marker is going to
+# work from this video — bail out of the remaining ~75 frames rather than
+# running the full detection pass for a doomed result. Deliberately does
+# NOT try to bail early just because weight_transfer specifically looks
+# doomed (ankles bad, hips fine) — head_stability still needs every
+# remaining frame from the same shared pass, so that case can't be
+# skipped without giving up a marker that's still viable.
+EARLY_BAILOUT_CHECKPOINT = 15
+
+# Confidence classification thresholds — first estimate, sized to get the
+# known real cases right (see pose.py tests), not validated against real
+# coaching data or more than a handful of real videos. Expect to retune.
+CONFIDENCE_HIGH_THRESHOLD = 0.75
+CONFIDENCE_MEDIUM_THRESHOLD = 0.4
+
 
 class InsufficientDetectionError(Exception):
     """Raised when too few sampled frames produce a usable pose detection."""
@@ -87,9 +103,41 @@ class FrameSample:
 
 
 @dataclass
+class ConfidenceBreakdown:
+    """The three components `confidence` is now built from (see
+    docs referenced in the 2026-09-06 confidence-gating plan): landmark
+    visibility alone was the *entire* confidence signal until now, which is
+    exactly what let a geometrically-nonsensical measurement (0.27cm base
+    width, ~97% visibility) look fully trustworthy. overall_score is
+    min(visibility, consistency, geometry) — deliberately the minimum, not
+    a weighted average, so one bad component can't be diluted by two good
+    ones."""
+
+    visibility_score: float
+    consistency_score: float
+    geometry_score: float
+    overall_score: float
+
+
+def classify_confidence(score: float) -> str:
+    """"high" / "medium" / "low" — thresholds are a first estimate, see the
+    module-level constants' comment. Deliberately set so "low" (< 0.4)
+    falls entirely below the pipeline's existing candidate-confidence floor
+    (0.5, in coordinator-api's diagnose.ts) -- a low-confidence measurement
+    is excluded from ever becoming a diagnosable issue by that pre-existing
+    mechanism once this score feeds it, with no separate gate needed here."""
+    if score >= CONFIDENCE_HIGH_THRESHOLD:
+        return "high"
+    if score >= CONFIDENCE_MEDIUM_THRESHOLD:
+        return "medium"
+    return "low"
+
+
+@dataclass
 class HeadStabilityResult:
     value_cm: float
     confidence: float
+    confidence_breakdown: ConfidenceBreakdown
     frame_count: int
     frames_with_detection: int
 
@@ -98,6 +146,7 @@ class HeadStabilityResult:
 class WeightTransferResult:
     value_percent: float
     confidence: float
+    confidence_breakdown: ConfidenceBreakdown
     frame_count: int
     frames_with_detection: int
 
@@ -136,6 +185,61 @@ def _sample_frame_indices(total_frames: int, source_fps: float) -> list[int]:
 
 def _landmark_ok(landmark) -> bool:
     return landmark.visibility > LANDMARK_MIN_SCORE and landmark.presence > LANDMARK_MIN_SCORE
+
+
+def _ramp(value: float, low: float, high: float) -> float:
+    """Linear ramp from 0 at `low` to 1 at `high` (or the reverse if
+    low > high), clamped to [0, 1]. Shared shape for every geometry-score
+    band below."""
+    if low == high:
+        return 1.0 if value == low else 0.0
+    t = (value - low) / (high - low)
+    return max(0.0, min(1.0, t))
+
+
+def _weight_transfer_geometry_score(base_width_m: float) -> float:
+    """How plausible `base_width_m` is as a real human ankle-to-ankle
+    stance width, scored continuously instead of the binary hard floor
+    below. Bands are a first estimate (2026-09-06 confidence-gating plan),
+    not validated against real coaching data:
+
+      < 0.05m           : never reaches this function -- MIN_RELIABLE_BASE_WIDTH_M
+                           already returns None entirely (unchanged).
+      0.05m -- 0.20m     : ramps 0 -> 1 -- the new borderline band. A camera
+                           angle that compresses stance width to e.g. 10cm
+                           (passes the hard floor, still clearly wrong) now
+                           scores ~0.33 here instead of passing silently.
+      0.20m -- 0.45m     : plausible human stance range, score = 1.0.
+      0.45m -- 0.70m     : ramps 1 -> 0 -- implausibly *wide* is equally
+                           suspect (could mean a mistracked landmark).
+      > 0.70m            : score = 0.
+    """
+    if base_width_m < 0.20:
+        return _ramp(base_width_m, 0.05, 0.20)
+    if base_width_m <= 0.45:
+        return 1.0
+    return _ramp(base_width_m, 0.70, 0.45)
+
+
+def _head_stability_geometry_score(peak_drift_m: float, hip_width_m: float) -> float:
+    """head_stability has no denominator, so no collapse-to-near-zero
+    failure mode the way weight_transfer does -- it degrades gracefully
+    with a bad angle rather than catastrophically. The available geometry
+    signal instead: cross-check the peak drift against the player's own
+    hip width (already extracted, no new landmarks needed). A head moving
+    multiple times its own hip width is implausible and suggests a
+    tracking glitch, not real technique. Bands are a first estimate, sized
+    to keep the one real validated case (17.14cm drift, ~HIGH) comfortably
+    inside the plausible band -- not validated beyond that.
+    """
+    if hip_width_m <= 0:
+        return 0.0
+    ratio = peak_drift_m / hip_width_m
+    if ratio <= 1.0:
+        return 1.0
+    if ratio >= 2.5:
+        return 0.0
+    return _ramp(ratio, 2.5, 1.0)
 
 
 def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
@@ -216,6 +320,17 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
                                 ),
                             )
                         )
+                    # Part 3 (confidence gating, 2026-09-06): if pose has
+                    # never been detected at all after a reasonable number
+                    # of attempts, neither marker is going to work from
+                    # this video -- stop rather than running the full
+                    # ~90-frame pass for a doomed result. Does NOT try to
+                    # bail early for "weight_transfer only" cases (hips
+                    # fine, ankles/geometry bad) -- head_stability still
+                    # needs every remaining frame from this same pass, so
+                    # that case can't be cheaply abandoned early.
+                    if frame_count >= EARLY_BAILOUT_CHECKPOINT and len(samples) == 0:
+                        break
                 index += 1
     finally:
         cap.release()
@@ -233,15 +348,27 @@ def _compute_head_stability_from_samples(
 
     baseline_count = max(1, round(len(valid) * BASELINE_FRACTION))
     baseline = sum(s.nose_x - s.hip_mid_x for s in valid[:baseline_count]) / baseline_count
+    baseline_hip_width = (
+        sum(abs(s.left_hip_x - s.right_hip_x) for s in valid[:baseline_count]) / baseline_count
+    )
 
     peak_drift_m = max(abs((s.nose_x - s.hip_mid_x) - baseline) for s in valid)
-    mean_confidence = sum(
+    visibility_score = sum(
         (s.nose_visibility + s.left_hip_visibility + s.right_hip_visibility) / 3 for s in valid
     ) / len(valid)
+    consistency_score = len(valid) / frame_count if frame_count else 0.0
+    geometry_score = _head_stability_geometry_score(peak_drift_m, baseline_hip_width)
+    overall_score = min(visibility_score, consistency_score, geometry_score)
 
     return HeadStabilityResult(
         value_cm=round(peak_drift_m * 100, 2),
-        confidence=round(mean_confidence, 3),
+        confidence=round(overall_score, 3),
+        confidence_breakdown=ConfidenceBreakdown(
+            visibility_score=round(visibility_score, 3),
+            consistency_score=round(consistency_score, 3),
+            geometry_score=round(geometry_score, 3),
+            overall_score=round(overall_score, 3),
+        ),
         frame_count=frame_count,
         frames_with_detection=len(valid),
     )
@@ -269,7 +396,7 @@ def _front_back_attrs(batting_hand: str) -> tuple[str, str]:
 
 
 def compute_weight_transfer_from_samples(
-    samples: list[FrameSample], batting_hand: str
+    samples: list[FrameSample], batting_hand: str, frame_count: int | None = None
 ) -> tuple[WeightTransferResult | None, WeightTransferDiagnostics]:
     """Pure landmark-driven computation — no video/MediaPipe involved, so
     this is directly unit-testable with hand-built FrameSample sequences.
@@ -367,7 +494,7 @@ def compute_weight_transfer_from_samples(
         return (s.hip_mid_x - baseline_back_x) / (baseline_front_x - baseline_back_x) * 100
 
     peak_percent = max(percent_of_base(s) for s in valid)
-    mean_confidence = sum(
+    visibility_score = sum(
         (
             s.left_hip_visibility
             + s.right_hip_visibility
@@ -377,12 +504,22 @@ def compute_weight_transfer_from_samples(
         / 4
         for s in valid
     ) / len(valid)
+    effective_frame_count = frame_count if frame_count is not None else len(samples)
+    consistency_score = len(valid) / effective_frame_count if effective_frame_count else 0.0
+    geometry_score = _weight_transfer_geometry_score(baseline_base_width)
+    overall_score = min(visibility_score, consistency_score, geometry_score)
 
     return (
         WeightTransferResult(
             value_percent=round(peak_percent, 2),
-            confidence=round(mean_confidence, 3),
-            frame_count=len(samples),
+            confidence=round(overall_score, 3),
+            confidence_breakdown=ConfidenceBreakdown(
+                visibility_score=round(visibility_score, 3),
+                consistency_score=round(consistency_score, 3),
+                geometry_score=round(geometry_score, 3),
+                overall_score=round(overall_score, 3),
+            ),
+            frame_count=effective_frame_count,
             frames_with_detection=len(valid),
         ),
         diagnostics,
@@ -393,8 +530,8 @@ def compute_weight_transfer(
     video_path: str, batting_hand: str
 ) -> tuple[WeightTransferResult | None, WeightTransferDiagnostics]:
     """Video-driving wrapper mirroring compute_head_stability's shape."""
-    samples, _frame_count = _run_pose_detection(video_path)
-    return compute_weight_transfer_from_samples(samples, batting_hand)
+    samples, frame_count = _run_pose_detection(video_path)
+    return compute_weight_transfer_from_samples(samples, batting_hand, frame_count)
 
 
 def analyze_batting_video(
@@ -417,7 +554,9 @@ def analyze_batting_video(
             weight_transfer_diagnostics=None,
         )
 
-    weight_transfer, diagnostics = compute_weight_transfer_from_samples(samples, batting_hand)
+    weight_transfer, diagnostics = compute_weight_transfer_from_samples(
+        samples, batting_hand, frame_count
+    )
     return BattingAnalysisResult(
         head_stability=head_stability,
         weight_transfer=weight_transfer,

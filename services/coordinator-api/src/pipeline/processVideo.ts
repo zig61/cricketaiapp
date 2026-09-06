@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requestBattingMeasurements, CvServiceError, type Measurement } from "../lib/cvService.js";
 import { explainIssue, type SecondaryMeasurementContext } from "../lib/explain.js";
+import { lowConfidenceNote } from "../lib/confidence.js";
 import { notFound } from "../lib/errors.js";
 import { markJob } from "./markJob.js";
 import {
@@ -192,7 +193,15 @@ export async function processVideo(
   }
 
   const candidates: Candidate[] = [];
+  // Tracked alongside candidates so explain() can be told the primary
+  // issue's confidence level (for the deterministic MEDIUM caveat) without
+  // re-deriving it from the raw score a second time.
+  const confidenceLevelByMarker = new Map<string, "high" | "medium" | "low">();
+
   for (const { markerKey, measurement } of measurementsToWrite) {
+    const level = measurement.confidenceBreakdown.level;
+    confidenceLevelByMarker.set(markerKey, level);
+
     const { data: measurementRow, error: measurementError } = await supabaseAdmin
       .from("measurements")
       .insert({
@@ -201,6 +210,12 @@ export async function processVideo(
         value: measurement.value,
         unit: measurement.unit,
         confidence: measurement.confidence,
+        // Deterministic, non-LLM -- a LOW-confidence result is already
+        // known unreliable, so there's no severity/explanation for it to
+        // attach to (see evaluateCandidate below); this is the only place
+        // the player learns *why*, applied regardless of whether the raw
+        // value happened to look like an issue or look fine.
+        confidence_note: level === "low" ? lowConfidenceNote(measurement.confidenceBreakdown) : null,
       })
       .select("id")
       .single();
@@ -292,6 +307,7 @@ export async function processVideo(
         referenceRange,
         severity: diagnosis.severity,
         confidence: diagnosis.confidence,
+        confidenceLevel: confidenceLevelByMarker.get(diagnosis.markerKey) ?? "high",
         player: {
           ageBand: profile?.age_band ?? null,
           battingHand: profile?.batting_hand ?? null,

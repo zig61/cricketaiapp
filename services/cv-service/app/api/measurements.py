@@ -8,7 +8,12 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.services.pose import InsufficientDetectionError, analyze_batting_video
+from app.services.pose import (
+    ConfidenceBreakdown,
+    InsufficientDetectionError,
+    analyze_batting_video,
+    classify_confidence,
+)
 
 router = APIRouter()
 
@@ -22,6 +27,16 @@ class BattingMeasurementsRequest(BaseModel):
 
 def error_envelope(code: str, message: str, details: dict | None = None) -> dict:
     return {"error": {"code": code, "message": message, "details": details or {}}}
+
+
+def _confidence_breakdown_json(breakdown: ConfidenceBreakdown) -> dict:
+    return {
+        "visibilityScore": breakdown.visibility_score,
+        "consistencyScore": breakdown.consistency_score,
+        "geometryScore": breakdown.geometry_score,
+        "overallScore": breakdown.overall_score,
+        "level": classify_confidence(breakdown.overall_score),
+    }
 
 
 def _download_video(video_url: str) -> str:
@@ -93,6 +108,7 @@ def batting_measurements(body: BattingMeasurementsRequest) -> dict:
             "value": result.head_stability.value_cm,
             "unit": "cm",
             "confidence": result.head_stability.confidence,
+            "confidenceBreakdown": _confidence_breakdown_json(result.head_stability.confidence_breakdown),
             "frameCount": result.head_stability.frame_count,
             "framesWithDetection": result.head_stability.frames_with_detection,
         },
@@ -101,6 +117,9 @@ def batting_measurements(body: BattingMeasurementsRequest) -> dict:
                 "value": result.weight_transfer.value_percent,
                 "unit": "percent_of_base_width",
                 "confidence": result.weight_transfer.confidence,
+                "confidenceBreakdown": _confidence_breakdown_json(
+                    result.weight_transfer.confidence_breakdown
+                ),
                 "frameCount": result.weight_transfer.frame_count,
                 "framesWithDetection": result.weight_transfer.frames_with_detection,
             }

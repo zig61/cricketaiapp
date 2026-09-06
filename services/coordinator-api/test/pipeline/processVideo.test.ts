@@ -13,15 +13,34 @@ const { processVideo } = await import("../../src/pipeline/processVideo.js");
 const CV_SERVICE_URL = "http://localhost:8000";
 const DEPS_BASE = { cvServiceUrl: CV_SERVICE_URL, anthropicApiKey: "test-key" };
 
+function defaultConfidenceBreakdown(confidence: number) {
+  // A plausible breakdown consistent with `confidence`, used as the default
+  // for tests that aren't specifically exercising confidence-gating
+  // behavior (see processVideo.test.ts's dedicated confidence-level tests
+  // for those) -- evaluateCandidate/selectPrimary only ever read the raw
+  // `confidence` number, so this doesn't need to be exact, just present.
+  return {
+    visibilityScore: confidence,
+    consistencyScore: confidence,
+    geometryScore: confidence,
+    overallScore: confidence,
+    level: confidence >= 0.75 ? "high" : confidence >= 0.4 ? "medium" : "low",
+  };
+}
+
 function battingResponse(overrides: {
   headStability?: Partial<Record<string, unknown>>;
   weightTransfer?: Partial<Record<string, unknown>> | null;
 } = {}) {
+  const headStabilityConfidence = (overrides.headStability?.confidence as number | undefined) ?? 0.86;
+  const weightTransferConfidence = (overrides.weightTransfer?.confidence as number | undefined) ?? 0.9;
+
   return {
     headStability: {
       value: 11.4,
       unit: "cm",
       confidence: 0.86,
+      confidenceBreakdown: defaultConfidenceBreakdown(headStabilityConfidence),
       frameCount: 24,
       framesWithDetection: 22,
       ...overrides.headStability,
@@ -33,6 +52,7 @@ function battingResponse(overrides: {
             value: 75,
             unit: "percent_of_base_width",
             confidence: 0.9,
+            confidenceBreakdown: defaultConfidenceBreakdown(weightTransferConfidence),
             frameCount: 24,
             framesWithDetection: 22,
             ...overrides.weightTransfer,
@@ -294,5 +314,109 @@ describe("processVideo", () => {
 
     expect(result).toMatchObject({ status: "failed", stage: "pose_estimate" });
     expect((result as { error: string }).error).toContain("422");
+  });
+
+  // --- confidence-gating (2026-09-06) ---
+
+  it("writes a deterministic confidence_note for a LOW-confidence measurement, and none for a HIGH one", async () => {
+    const measurementInserts: Array<Record<string, unknown>> = [];
+
+    let videoFromCalls = 0;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: null, batting_hand: "right", playing_level: null } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") {
+        return {
+          select: () => ({ single: () => Promise.resolve({ error: null, data: { id: "measurement-1" } }) }),
+          insert: (payload: Record<string, unknown>) => {
+            measurementInserts.push(payload);
+            return {
+              select: () => ({
+                single: () => Promise.resolve({ error: null, data: { id: "measurement-1" } }),
+              }),
+            };
+          },
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    // head_stability: HIGH confidence. weight_transfer: LOW confidence
+    // (0.3, below the 0.5 candidate floor) -- the exact borderline-angle
+    // case this pass exists to surface, rather than silently dropping it.
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          battingResponse({
+            headStability: { value: 2.1, confidence: 0.95 },
+            weightTransfer: { value: 30, confidence: 0.3 },
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    const headStabilityInsert = measurementInserts.find((i) => i.marker_key === "head_stability");
+    const weightTransferInsert = measurementInserts.find((i) => i.marker_key === "balance_weight_transfer");
+
+    expect(headStabilityInsert?.confidence_note).toBeNull();
+    expect(weightTransferInsert?.confidence_note).toContain("camera");
+  });
+
+  it("never lets a LOW-confidence candidate become the primary issue, even if its raw value is out of range", async () => {
+    let videoFromCalls = 0;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: null, batting_hand: "right", playing_level: null } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") return queryResult({ data: { id: "measurement-1" } });
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    // Both markers are technically "out of range" (would normally be
+    // candidates), but both have LOW confidence -- neither should ever
+    // reach diagnose/explain/match_drill.
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          battingResponse({
+            headStability: { value: 30, confidence: 0.3 },
+            weightTransfer: { value: 20, confidence: 0.35 },
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const result = await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    expect(result).toMatchObject({ status: "processed", primaryIssueId: null });
   });
 });

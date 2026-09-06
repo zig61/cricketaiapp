@@ -1,12 +1,28 @@
 import { z } from "zod";
 
+// The three components `confidence` is built from (2026-09-06 confidence-gating
+// pass) — visibility alone used to be the entire signal, which is exactly
+// what let a geometrically-nonsensical measurement (0.27cm base width,
+// ~97% visibility) look fully trustworthy. overallScore is min() of the
+// three, not a weighted average, so one bad component can't be diluted.
+const confidenceBreakdownSchema = z.object({
+  visibilityScore: z.number(),
+  consistencyScore: z.number(),
+  geometryScore: z.number(),
+  overallScore: z.number(),
+  level: z.enum(["high", "medium", "low"]),
+});
+
 const measurementSchema = z.object({
   value: z.number(),
   unit: z.string(),
   confidence: z.number(),
+  confidenceBreakdown: confidenceBreakdownSchema,
   frameCount: z.number(),
   framesWithDetection: z.number(),
 });
+
+export type ConfidenceBreakdown = z.infer<typeof confidenceBreakdownSchema>;
 
 // Always present, even when weightTransfer succeeds — lets a null result
 // be debugged (ankles never detected vs. detected but just below the

@@ -110,6 +110,7 @@ export interface Measurement {
   value: number;
   unit: string;
   confidence: number;
+  confidence_note: string | null;
   created_at: string;
 }
 

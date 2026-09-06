@@ -3,9 +3,11 @@ import pytest
 from app.services.pose import (
     FrameSample,
     InsufficientDetectionError,
+    classify_confidence,
     compute_head_stability,
     compute_weight_transfer_from_samples,
 )
+from app.services.pose import _head_stability_geometry_score, _weight_transfer_geometry_score
 
 
 def _sample(hip_x: float, left_ankle_x: float = 0.0, right_ankle_x: float = 0.3) -> FrameSample:
@@ -227,3 +229,135 @@ def test_returns_none_when_the_stance_base_width_is_implausibly_narrow():
     # all" (the previous test), which look identical from skip reason alone.
     assert diagnostics.frames_with_both_ankles_ok == 6
     assert diagnostics.baseline_base_width_m == pytest.approx(0.02, abs=0.001)
+
+
+def test_early_bailout_stops_well_short_of_the_full_frame_budget(synthetic_video_path):
+    # Regression/behavior test for Part 3 of the confidence-gating plan
+    # (2026-09-06): a video where nothing is ever detected should stop
+    # around EARLY_BAILOUT_CHECKPOINT frames, not run the full ~90-frame
+    # budget for a doomed result.
+    with pytest.raises(InsufficientDetectionError) as exc_info:
+        compute_head_stability(synthetic_video_path)
+
+    assert exc_info.value.frame_count <= 20
+
+
+# --- classify_confidence: thresholds are a first estimate, see pose.py's comment ---
+
+
+@pytest.mark.parametrize(
+    "score,expected",
+    [
+        (1.0, "high"),
+        (0.75, "high"),
+        (0.749, "medium"),
+        (0.4, "medium"),
+        (0.399, "low"),
+        (0.0, "low"),
+    ],
+)
+def test_classify_confidence_thresholds(score, expected):
+    assert classify_confidence(score) == expected
+
+
+# --- geometry scores: pure functions, the actual new signal in this pass ---
+
+
+@pytest.mark.parametrize(
+    "base_width_m,expected",
+    [
+        (0.05, 0.0),  # bottom of the borderline ramp (never actually reached in practice --
+        # anything below this hits the separate hard floor and returns None instead)
+        (0.10, pytest.approx(1 / 3, abs=0.01)),  # the real borderline case this pass targets
+        (0.15, pytest.approx(2 / 3, abs=0.01)),
+        (0.20, 1.0),
+        (0.30, 1.0),  # plausible human stance width, middle of the plateau
+        (0.45, 1.0),
+        (0.575, pytest.approx(0.5, abs=0.01)),  # midpoint of the upper ramp-down
+        (0.70, 0.0),
+        (1.0, 0.0),  # implausibly wide -- as suspect as implausibly narrow
+    ],
+)
+def test_weight_transfer_geometry_score_bands(base_width_m, expected):
+    assert _weight_transfer_geometry_score(base_width_m) == expected
+
+
+@pytest.mark.parametrize(
+    "peak_drift_m,hip_width_m,expected",
+    [
+        (0.10, 0.15, 1.0),  # drift well under hip width -- plausible
+        (0.15, 0.15, 1.0),  # exactly at the ratio-1.0 boundary
+        (0.2625, 0.15, pytest.approx(0.5, abs=0.01)),  # ratio 1.75, midpoint of the ramp
+        (0.375, 0.15, 0.0),  # ratio 2.5 -- implausible, a head can't realistically move
+        # more than 2.5x the player's own hip width
+        (0.10, 0.0, 0.0),  # degenerate hip width -- guarded, not a division error
+    ],
+)
+def test_head_stability_geometry_score_bands(peak_drift_m, hip_width_m, expected):
+    assert _head_stability_geometry_score(peak_drift_m, hip_width_m) == expected
+
+
+# --- the three requested end-to-end scenarios, through the real composite formula ---
+
+
+def test_high_confidence_weight_transfer_case():
+    # Plausible stance width (0.30m, middle of the plausible band), good
+    # visibility, full frame consistency -- the "clean video" case.
+    samples = [_sample(x) for x in (0.28, 0.22, 0.15, 0.10, 0.075, 0.09, 0.10, 0.12, 0.15, 0.18)]
+
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "right", frame_count=10)
+
+    assert result is not None
+    assert result.confidence_breakdown.geometry_score == 1.0
+    assert classify_confidence(result.confidence) == "high"
+
+
+def test_medium_confidence_weight_transfer_case_from_a_moderately_bad_angle():
+    # 15cm base width -- clearly narrower than a real stance, but not the
+    # extreme 0.27cm case. Good visibility/consistency, so the WEAK LINK
+    # is specifically geometry -- exactly the case min() is designed to
+    # catch rather than let visibility paper over.
+    samples = [
+        _sample(x, left_ankle_x=0.0, right_ankle_x=0.15)
+        for x in (0.14, 0.11, 0.08, 0.05, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12)
+    ]
+
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "right", frame_count=10)
+
+    assert result is not None
+    assert classify_confidence(result.confidence) == "medium"
+    assert result.confidence_breakdown.geometry_score < result.confidence_breakdown.visibility_score
+
+
+def test_low_confidence_weight_transfer_case_the_exact_borderline_gap_this_pass_closes():
+    # 10cm base width -- the real gap named in this task: bad enough to be
+    # untrustworthy, but not bad enough to hit the pre-existing 5cm hard
+    # floor. Visibility stays high throughout (mirrors the real 0.27cm
+    # case, where MediaPipe was extremely confident about *where* the
+    # ankles were while the geometry itself was meaningless) -- this is
+    # exactly what min() closes: high visibility no longer masks it.
+    samples = [
+        _sample(x, left_ankle_x=0.0, right_ankle_x=0.10)
+        for x in (0.09, 0.07, 0.05, 0.03, 0.025, 0.03, 0.04, 0.05, 0.07, 0.08)
+    ]
+
+    result, _diagnostics = compute_weight_transfer_from_samples(samples, "right", frame_count=10)
+
+    assert result is not None  # clears the hard floor -- still reported, just distrusted
+    assert result.confidence_breakdown.visibility_score > 0.8  # visibility alone looks fine
+    assert classify_confidence(result.confidence) == "low"  # but geometry drags it down
+
+
+def test_the_extreme_bad_angle_case_still_hits_the_pre_existing_hard_floor_unchanged():
+    # The actual 0.27cm real-world case this whole pass was prompted by --
+    # confirms the new scoring doesn't regress the existing hard rejection
+    # into "just a LOW-confidence result" -- it's still None entirely.
+    samples = [
+        _sample(x, left_ankle_x=0.150, right_ankle_x=0.1527)  # ~2.7mm apart
+        for x in (0.14, 0.145, 0.15, 0.151, 0.148, 0.149, 0.15, 0.151, 0.149, 0.15)
+    ]
+
+    result, diagnostics = compute_weight_transfer_from_samples(samples, "right", frame_count=10)
+
+    assert result is None
+    assert diagnostics.baseline_base_width_m < 0.05
