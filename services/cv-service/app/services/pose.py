@@ -176,11 +176,10 @@ class BattingAnalysisResult:
     weight_transfer_diagnostics: WeightTransferDiagnostics | None
 
 
-def _sample_frame_indices(total_frames: int, source_fps: float) -> list[int]:
+def _sample_step(source_fps: float) -> int:
     if source_fps <= 0:
         source_fps = 30.0
-    step = max(1, round(source_fps / TARGET_SAMPLE_FPS))
-    return list(range(0, total_frames, step))[:MAX_SAMPLED_FRAMES]
+    return max(1, round(source_fps / TARGET_SAMPLE_FPS))
 
 
 def _landmark_ok(landmark) -> bool:
@@ -272,8 +271,16 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
 
     try:
         source_fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        sample_indices = set(_sample_frame_indices(total_frames, source_fps))
+        # Deliberately not using CAP_PROP_FRAME_COUNT to decide which frames
+        # to sample: browser-recorded webm blobs (MediaRecorder) routinely
+        # report it as 0 -- the container has no finalized index -- which
+        # made the old range(0, total_frames, step) sampling silently
+        # produce an empty index set and skip pose detection on every frame,
+        # even though cap.read() could step through the file frame-by-frame
+        # just fine. Sampling by index-modulo-step as frames are actually
+        # read has no such dependency and needs its own explicit frame cap
+        # instead (previously implicit in the precomputed list's length).
+        step = _sample_step(source_fps)
 
         with vision.PoseLandmarker.create_from_options(options) as landmarker:
             index = 0
@@ -281,7 +288,7 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
                 ok, frame_bgr = cap.read()
                 if not ok:
                     break
-                if index in sample_indices:
+                if index % step == 0:
                     frame_count += 1
                     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
@@ -330,6 +337,8 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
                     # needs every remaining frame from this same pass, so
                     # that case can't be cheaply abandoned early.
                     if frame_count >= EARLY_BAILOUT_CHECKPOINT and len(samples) == 0:
+                        break
+                    if frame_count >= MAX_SAMPLED_FRAMES:
                         break
                 index += 1
     finally:

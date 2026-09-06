@@ -242,6 +242,33 @@ def test_early_bailout_stops_well_short_of_the_full_frame_budget(synthetic_video
     assert exc_info.value.frame_count <= 20
 
 
+def test_sampling_does_not_depend_on_the_containers_frame_count(synthetic_video_path, monkeypatch):
+    # Real bug found live (2026-09-06): browser-recorded webm blobs from the
+    # in-app "Record in-app" feature's MediaRecorder routinely report
+    # CAP_PROP_FRAME_COUNT as 0 -- the container has no finalized index --
+    # which made the old range(0, total_frames, step) sampling silently
+    # compute an *empty* set of frames to sample, so pose detection never
+    # even attempted a single frame despite cap.read() working fine
+    # frame-by-frame. Simulate that exact metadata gap here.
+    import cv2
+
+    real_get = cv2.VideoCapture.get
+
+    def fake_get(self, prop_id):
+        if prop_id == cv2.CAP_PROP_FRAME_COUNT:
+            return 0
+        return real_get(self, prop_id)
+
+    monkeypatch.setattr(cv2.VideoCapture, "get", fake_get)
+
+    with pytest.raises(InsufficientDetectionError) as exc_info:
+        compute_head_stability(synthetic_video_path)
+
+    # frame_count > 0 proves frames were actually sampled and attempted --
+    # with the bug, this was exactly 0 regardless of the video's real content.
+    assert exc_info.value.frame_count > 0
+
+
 # --- classify_confidence: thresholds are a first estimate, see pose.py's comment ---
 
 
