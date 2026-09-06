@@ -140,6 +140,18 @@ class HeadStabilityResult:
     confidence_breakdown: ConfidenceBreakdown
     frame_count: int
     frames_with_detection: int
+    # Real bug found live (2026-09-06): head_stability and weight_transfer
+    # both read the same world-space x axis. In a correctly side-on video
+    # that axis is the front-foot/back-foot line, so a batter driving
+    # through the ball moves their head forward along the *same* axis
+    # weight_transfer measures as (correct) forward press -- the old
+    # formula (raw drift from a pre-shot baseline) couldn't tell that
+    # apart from the head genuinely falling away. True when there were
+    # enough frames with reliable ankle detection to isolate the residual
+    # not explained by weight-transfer progress (see
+    # _compute_head_stability_from_samples); False means it fell back to
+    # the old raw-drift formula, which still conflates the two.
+    isolated_from_weight_transfer: bool
 
 
 @dataclass
@@ -174,6 +186,25 @@ class BattingAnalysisResult:
     weight_transfer: WeightTransferResult | None
     weight_transfer_skip_reason: str | None
     weight_transfer_diagnostics: WeightTransferDiagnostics | None
+
+
+def _linear_residuals(x: list[float], y: list[float]) -> list[float]:
+    """Least-squares residuals of y against a best-fit line through x --
+    how much each y deviates from what x alone would predict. Falls back to
+    y's deviation from its own mean when x has no spread (e.g. weight never
+    shifted during the clip), since no line is fittable through a single x
+    value. Plain-python, not numpy: two-variable OLS is a handful of sums,
+    and this keeps the regression trivially unit-testable in isolation."""
+    n = len(x)
+    mean_x = sum(x) / n
+    mean_y = sum(y) / n
+    var_x = sum((xi - mean_x) ** 2 for xi in x)
+    if var_x == 0:
+        return [yi - mean_y for yi in y]
+    cov_xy = sum((xi - mean_x) * (yi - mean_y) for xi, yi in zip(x, y))
+    slope = cov_xy / var_x
+    intercept = mean_y - slope * mean_x
+    return [yi - (intercept + slope * xi) for xi, yi in zip(x, y)]
 
 
 def _sample_step(source_fps: float) -> int:
@@ -348,7 +379,7 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
 
 
 def _compute_head_stability_from_samples(
-    samples: list[FrameSample], frame_count: int
+    samples: list[FrameSample], frame_count: int, batting_hand: str | None = None
 ) -> HeadStabilityResult:
     valid = [s for s in samples if s.nose_visibility > LANDMARK_MIN_SCORE and s.hips_ok]
 
@@ -356,17 +387,77 @@ def _compute_head_stability_from_samples(
         raise InsufficientDetectionError(len(valid), frame_count)
 
     baseline_count = max(1, round(len(valid) * BASELINE_FRACTION))
-    baseline = sum(s.nose_x - s.hip_mid_x for s in valid[:baseline_count]) / baseline_count
     baseline_hip_width = (
         sum(abs(s.left_hip_x - s.right_hip_x) for s in valid[:baseline_count]) / baseline_count
     )
 
-    peak_drift_m = max(abs((s.nose_x - s.hip_mid_x) - baseline) for s in valid)
+    combined: list[FrameSample] = []
+    if batting_hand is not None:
+        front, back = _front_back_attrs(batting_hand)
+
+        def ankle_visibility(s: FrameSample, side: str) -> float:
+            return s.left_ankle_visibility if side == "left" else s.right_ankle_visibility
+
+        combined = [
+            s
+            for s in valid
+            if ankle_visibility(s, front) > LANDMARK_MIN_SCORE
+            and ankle_visibility(s, back) > LANDMARK_MIN_SCORE
+        ]
+
+    isolated_from_weight_transfer = len(combined) >= MIN_VALID_FRAMES
+    scoring_frames = valid
+
+    if isolated_from_weight_transfer:
+        # Isolate the part of head movement NOT explained by the same
+        # forward weight shift that drives a correct front-foot shot (see
+        # HeadStabilityResult.isolated_from_weight_transfer). Regressing
+        # head-relative-to-hip position against weight-transfer progress
+        # and taking the residual keeps a controlled lean into the ball
+        # from registering as "drift", while a head that moves
+        # independently of the weight shift -- wobbling, or genuinely
+        # falling away -- still shows up as a large residual.
+        def ankle_x(s: FrameSample, side: str) -> float:
+            return s.left_ankle_x if side == "left" else s.right_ankle_x
+
+        combined_baseline_count = max(1, round(len(combined) * BASELINE_FRACTION))
+        baseline_front_x = (
+            sum(ankle_x(s, front) for s in combined[:combined_baseline_count]) / combined_baseline_count
+        )
+        baseline_back_x = (
+            sum(ankle_x(s, back) for s in combined[:combined_baseline_count]) / combined_baseline_count
+        )
+        base_width = baseline_front_x - baseline_back_x
+
+        def weight_ratio(s: FrameSample) -> float:
+            return (s.hip_mid_x - baseline_back_x) / base_width if base_width else 0.0
+
+        head_relative = [s.nose_x - s.hip_mid_x for s in combined]
+        ratios = [weight_ratio(s) for s in combined]
+        residuals = _linear_residuals(ratios, head_relative)
+        peak_drift_m = max(abs(r) for r in residuals)
+        scoring_frames = combined
+    else:
+        # Not enough frames with reliable ankle detection (or no
+        # batting_hand at all) to isolate the weight-transfer-driven
+        # component -- fall back to the older raw-drift-from-baseline
+        # measure. Known to conflate forward press with real instability;
+        # reported anyway with reduced confidence rather than failing the
+        # whole marker, since some signal beats none when ankles
+        # specifically are the weak link.
+        baseline = sum(s.nose_x - s.hip_mid_x for s in valid[:baseline_count]) / baseline_count
+        peak_drift_m = max(abs((s.nose_x - s.hip_mid_x) - baseline) for s in valid)
+
     visibility_score = sum(
-        (s.nose_visibility + s.left_hip_visibility + s.right_hip_visibility) / 3 for s in valid
-    ) / len(valid)
+        (s.nose_visibility + s.left_hip_visibility + s.right_hip_visibility) / 3 for s in scoring_frames
+    ) / len(scoring_frames)
     consistency_score = len(valid) / frame_count if frame_count else 0.0
     geometry_score = _head_stability_geometry_score(peak_drift_m, baseline_hip_width)
+    # A fallback result can't rule out that some of its "drift" is really
+    # just correct forward press -- capped below HIGH so it always reads
+    # as at most a caveated result, never a confident diagnosis.
+    if not isolated_from_weight_transfer:
+        geometry_score = min(geometry_score, CONFIDENCE_MEDIUM_THRESHOLD)
     overall_score = min(visibility_score, consistency_score, geometry_score)
 
     return HeadStabilityResult(
@@ -380,16 +471,17 @@ def _compute_head_stability_from_samples(
         ),
         frame_count=frame_count,
         frames_with_detection=len(valid),
+        isolated_from_weight_transfer=isolated_from_weight_transfer,
     )
 
 
-def compute_head_stability(video_path: str) -> HeadStabilityResult:
+def compute_head_stability(video_path: str, batting_hand: str | None = None) -> HeadStabilityResult:
     """Runs pose estimation on `video_path` and returns the peak
-    head-drift-from-stance-baseline measurement, in centimeters. Thin wrapper
-    around the shared extraction pass, kept for direct testability and
-    backward compatibility with existing callers/tests."""
+    head-instability measurement, in centimeters. Thin wrapper around the
+    shared extraction pass, kept for direct testability and backward
+    compatibility with existing callers/tests."""
     samples, frame_count = _run_pose_detection(video_path)
-    return _compute_head_stability_from_samples(samples, frame_count)
+    return _compute_head_stability_from_samples(samples, frame_count, batting_hand)
 
 
 def _front_back_attrs(batting_hand: str) -> tuple[str, str]:
@@ -553,7 +645,7 @@ def analyze_batting_video(
     error, so one marker's limitation never blocks the other)."""
     samples, frame_count = _run_pose_detection(video_path)
 
-    head_stability = _compute_head_stability_from_samples(samples, frame_count)
+    head_stability = _compute_head_stability_from_samples(samples, frame_count, batting_hand)
 
     if batting_hand is None:
         return BattingAnalysisResult(

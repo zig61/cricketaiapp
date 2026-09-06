@@ -111,6 +111,7 @@ def batting_measurements(body: BattingMeasurementsRequest) -> dict:
             "confidenceBreakdown": _confidence_breakdown_json(result.head_stability.confidence_breakdown),
             "frameCount": result.head_stability.frame_count,
             "framesWithDetection": result.head_stability.frames_with_detection,
+            "isolatedFromWeightTransfer": result.head_stability.isolated_from_weight_transfer,
         },
         "weightTransfer": (
             {

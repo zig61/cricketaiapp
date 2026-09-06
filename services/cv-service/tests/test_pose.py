@@ -1,13 +1,19 @@
 import pytest
 
 from app.services.pose import (
+    CONFIDENCE_HIGH_THRESHOLD,
     FrameSample,
     InsufficientDetectionError,
     classify_confidence,
     compute_head_stability,
     compute_weight_transfer_from_samples,
 )
-from app.services.pose import _head_stability_geometry_score, _weight_transfer_geometry_score
+from app.services.pose import (
+    _compute_head_stability_from_samples,
+    _head_stability_geometry_score,
+    _linear_residuals,
+    _weight_transfer_geometry_score,
+)
 
 
 def _sample(hip_x: float, left_ankle_x: float = 0.0, right_ankle_x: float = 0.3) -> FrameSample:
@@ -29,6 +35,127 @@ def _sample(hip_x: float, left_ankle_x: float = 0.0, right_ankle_x: float = 0.3)
         right_ankle_x=right_ankle_x,
         right_ankle_visibility=0.9,
     )
+
+
+def _head_frame(
+    hip_x: float,
+    nose_x: float,
+    front_ankle_x: float = 0.3,
+    back_ankle_x: float = 0.0,
+) -> FrameSample:
+    """A FrameSample for the head_stability/weight-transfer-correlation
+    tests below: hips centered on hip_x with a plausible ~10cm hip width
+    (the geometry score treats zero hip width as unmeasurable, so hips
+    can't be fully symmetric the way _sample's weight-transfer-only frames
+    are), nose at nose_x, and fixed front/back ankles -- feet planted,
+    matching a real stance where hip position (not foot position) is what
+    moves as weight transfers. Assumes batting_hand="right" (front=left
+    ankle, back=right ankle, per _front_back_attrs)."""
+    return FrameSample(
+        nose_x=nose_x,
+        nose_visibility=0.9,
+        left_hip_x=hip_x + 0.05,
+        left_hip_visibility=0.9,
+        right_hip_x=hip_x - 0.05,
+        right_hip_visibility=0.9,
+        left_ankle_x=front_ankle_x,
+        left_ankle_visibility=0.9,
+        right_ankle_x=back_ankle_x,
+        right_ankle_visibility=0.9,
+    )
+
+
+# --- _linear_residuals: the pure regression math the redesign depends on ---
+
+
+def test_linear_residuals_are_near_zero_for_an_exact_line():
+    x = [i / 9 for i in range(10)]
+    y = [0.02 + 0.05 * xi for xi in x]  # exact line -- no noise
+    residuals = _linear_residuals(x, y)
+    assert all(abs(r) < 1e-9 for r in residuals)
+
+
+def test_linear_residuals_surface_a_single_outlier():
+    x = [i / 9 for i in range(10)]
+    y = [0.02 + 0.05 * xi for xi in x]
+    y[5] += 0.08  # one frame perturbed independently of x
+    residuals = _linear_residuals(x, y)
+    assert abs(residuals[5]) > 0.06  # the outlier dominates its own residual
+    assert all(abs(r) < 0.02 for i, r in enumerate(residuals) if i != 5)
+
+
+def test_linear_residuals_falls_back_to_deviation_from_mean_when_x_has_no_spread():
+    x = [0.5, 0.5, 0.5]
+    y = [1.0, 2.0, 3.0]
+    residuals = _linear_residuals(x, y)
+    assert residuals == pytest.approx([-1.0, 0.0, 1.0])
+
+
+# --- head_stability vs. weight_transfer: the real bug found live 2026-09-06 ---
+#
+# head_stability and weight_transfer both read the same world-space x axis.
+# In a correctly side-on video that axis is the front-foot/back-foot line,
+# so a batter driving through the ball moves their head forward along the
+# *same* axis weight_transfer measures as (correct) forward press. The old
+# formula -- raw drift from a pre-shot baseline -- couldn't tell that apart
+# from the head genuinely falling away independent of the shot.
+
+
+def test_head_stability_does_not_flag_a_correct_forward_lean_as_drift():
+    # Head position relative to the hips moves in exact linear proportion
+    # to weight-transfer progress -- a pure, correlated forward lean, no
+    # independent wobble. The redesigned formula should score this as
+    # near-zero drift and high confidence.
+    n = 20
+    samples = [
+        _head_frame(hip_x=(i / (n - 1)) * 0.3, nose_x=(i / (n - 1)) * 0.3 + 0.02 + 0.05 * (i / (n - 1)))
+        for i in range(n)
+    ]
+
+    result = _compute_head_stability_from_samples(samples, frame_count=n, batting_hand="right")
+
+    assert result.isolated_from_weight_transfer is True
+    assert result.value_cm < 0.5
+    assert result.confidence >= CONFIDENCE_HIGH_THRESHOLD
+
+
+def test_head_stability_still_catches_movement_independent_of_weight_transfer():
+    # Same correlated-lean setup as above, but one frame's head position is
+    # additionally perturbed by 8cm independent of weight-transfer progress
+    # -- a real wobble/falling-away. The redesigned formula should surface
+    # roughly that 8cm, not the larger total raw range (lean + spike) the
+    # old baseline-drift formula would have reported.
+    n = 20
+    samples = []
+    for i in range(n):
+        ratio = i / (n - 1)
+        hip_x = ratio * 0.3
+        nose_x = hip_x + 0.02 + 0.05 * ratio
+        if i == 10:
+            nose_x += 0.08
+        samples.append(_head_frame(hip_x, nose_x))
+
+    result = _compute_head_stability_from_samples(samples, frame_count=n, batting_hand="right")
+
+    assert result.isolated_from_weight_transfer is True
+    assert 6.0 <= result.value_cm <= 9.0
+
+
+def test_head_stability_falls_back_to_raw_drift_without_a_batting_hand():
+    # No batting_hand -> can't isolate the weight-transfer-driven component
+    # -- falls back to the old raw-drift formula rather than failing the
+    # marker outright, and confidence is capped below HIGH since a fallback
+    # result can't rule out conflating a correct lean with real drift.
+    n = 20
+    samples = [
+        _head_frame(hip_x=(i / (n - 1)) * 0.3, nose_x=(i / (n - 1)) * 0.3 + 0.02 + 0.05 * (i / (n - 1)))
+        for i in range(n)
+    ]
+
+    result = _compute_head_stability_from_samples(samples, frame_count=n, batting_hand=None)
+
+    assert result.isolated_from_weight_transfer is False
+    assert result.confidence < CONFIDENCE_HIGH_THRESHOLD
 
 
 def test_raises_insufficient_detection_on_a_video_with_no_person(synthetic_video_path):
