@@ -28,9 +28,16 @@ const MARKER_DESCRIPTIONS: Record<string, string> = {
 // AWAY from the ball line") — appropriate for the normal diagnosis path,
 // wrong for UNVALIDATED_RANGE_MARKERS, which must describe only what's
 // measured, not which direction is bad.
+// head_stability's wording deliberately avoids the literal phrase "weight
+// transfer" -- that's balance_weight_transfer's own plain term (see
+// MARKER_KEY_TO_PLAIN_TERM below), forbidden when head_stability alone is
+// in scope. A real live run (2026-09-09) showed the model reliably echoing
+// that exact phrase back when the briefing itself used it, tripping
+// containsOutOfScopeClaim on nearly every call and silently discarding a
+// perfectly good response in favor of the plainer fallback template.
 const NEUTRAL_MARKER_DESCRIPTIONS: Record<string, string> = {
   head_stability:
-    "head_stability — how far the player's head moves relative to their hips during the shot, isolated from the forward movement expected from correct weight transfer, in centimeters.",
+    "head_stability — how far the player's head moves relative to their hips during the shot, isolated from the forward body motion expected as the front foot takes the player's weight, in centimeters.",
   balance_weight_transfer:
     "balance_weight_transfer — how far the player's hips move toward their front foot during the shot, as a percentage of their own stance width.",
 };
