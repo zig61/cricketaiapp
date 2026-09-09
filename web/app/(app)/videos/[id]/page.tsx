@@ -8,6 +8,13 @@ import {
   demoDrill,
 } from "@/lib/demo";
 
+// Mirrors coordinator-api's UNVALIDATED_RANGE_MARKERS (src/pipeline/diagnose.ts)
+// -- keep in sync. head_stability and balance_weight_transfer's reference
+// ranges aren't validated yet (2026-09-09 literature review), so the
+// pipeline reports these as neutral measurements rather than diagnosed
+// problems; the heading here follows that framing for the same two markers.
+const UNVALIDATED_RANGE_MARKERS = new Set(["head_stability", "balance_weight_transfer"]);
+
 const STATUS_MESSAGES: Record<string, string> = {
   uploaded: "Your video has been received and is queued for validation.",
   validating: "Your video is being validated.",
@@ -31,7 +38,7 @@ interface ViewModel {
   createdAt: string;
   status: string;
   rejectionReason: string | null;
-  primaryIssue: { explanationText: string | null } | null;
+  primaryIssue: { explanationText: string | null; isUnvalidatedRange: boolean } | null;
   measurements: {
     markerKey: string;
     value: string;
@@ -58,7 +65,11 @@ export default async function VideoDetailPage({
           createdAt: video.created_at,
           status: video.status,
           rejectionReason: video.rejection_reason,
-          primaryIssue: { explanationText: demoPrimaryIssue.explanation_text },
+          // Demo fixture copy (lib/demo.ts) predates the 2026-09-09 neutral-
+          // framing change and still writes a full verdict for head_stability
+          // -- out of scope here (that's the marketing/preview fixture text,
+          // not pipeline behavior), so left as the confident heading for now.
+          primaryIssue: { explanationText: demoPrimaryIssue.explanation_text, isUnvalidatedRange: false },
           measurements: demoMeasurements,
           drill: {
             title: demoDrill.title,
@@ -74,7 +85,7 @@ export default async function VideoDetailPage({
   const { data: video } = await supabase.from("videos").select("*").eq("id", id).maybeSingle();
   if (!video) notFound();
 
-  let primaryIssue: { explanationText: string | null } | null = null;
+  let primaryIssue: { explanationText: string | null; isUnvalidatedRange: boolean } | null = null;
   let measurements: ViewModel["measurements"] = [];
   let drill: ViewModel["drill"] = null;
 
@@ -94,14 +105,19 @@ export default async function VideoDetailPage({
       const [{ data: issues }, { data: rawMeasurements }] = await Promise.all([
         supabase
           .from("issues")
-          .select("id, is_primary, explanation_text")
+          .select("id, is_primary, explanation_text, measurement_id")
           .eq("analysis_id", analysis.id),
         supabase.from("measurements").select("*").eq("analysis_id", analysis.id),
       ]);
 
       const primary = issues?.find((issue) => issue.is_primary) ?? null;
       if (primary) {
-        primaryIssue = { explanationText: primary.explanation_text };
+        const primaryMarkerKey = rawMeasurements?.find((m) => m.id === primary.measurement_id)
+          ?.marker_key;
+        primaryIssue = {
+          explanationText: primary.explanation_text,
+          isUnvalidatedRange: primaryMarkerKey ? UNVALIDATED_RANGE_MARKERS.has(primaryMarkerKey) : false,
+        };
 
         const { data: prescription } = await supabase
           .from("drill_prescriptions")
@@ -181,7 +197,7 @@ function VideoView({ model }: { model: ViewModel }) {
         {model.status === "complete" && model.primaryIssue ? (
           <div className="mt-4 border-t border-[var(--border)] pt-4">
             <h2 className="font-display text-sm font-semibold text-[var(--accent-strong)]">
-              Your biggest opportunity
+              {model.primaryIssue.isUnvalidatedRange ? "What we measured" : "Your biggest opportunity"}
             </h2>
             <p className="mt-2 text-sm leading-6 text-[var(--foreground)]">
               {model.primaryIssue.explanationText ?? "No explanation available yet."}

@@ -10,6 +10,7 @@ import {
   writeIssue,
   lookupRootCause,
   referenceRangeFor,
+  UNVALIDATED_RANGE_MARKERS,
   type Candidate,
 } from "./diagnose.js";
 import { matchDrill } from "./matchDrill.js";
@@ -341,17 +342,26 @@ export async function processVideo(
       started_at: new Date().toISOString(),
     });
 
-    try {
-      await matchDrill(supabaseAdmin, diagnosis.rootCauseId, diagnosis.issueId);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown match_drill error";
-      await markJob(supabaseAdmin, videoId, "match_drill", {
-        status: "failed",
-        error: message,
-        completed_at: new Date().toISOString(),
-      });
-      await supabaseAdmin.from("videos").update({ status: "failed" }).eq("id", videoId);
-      return { status: "failed", videoId, stage: "match_drill", error: message };
+    // UNVALIDATED_RANGE_MARKERS' reference ranges aren't validated (see
+    // diagnose.ts), so there's no trustworthy basis to prescribe a drill
+    // against yet -- skip matchDrill entirely rather than prescribing a
+    // fix for a measurement explain.ts itself won't call a problem. The
+    // processing_jobs schema has no "skipped" status (only pending/
+    // running/succeeded/failed), so this is recorded as "succeeded" --
+    // deliberately doing nothing is a valid, non-error outcome here.
+    if (!UNVALIDATED_RANGE_MARKERS.has(diagnosis.markerKey)) {
+      try {
+        await matchDrill(supabaseAdmin, diagnosis.rootCauseId, diagnosis.issueId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Unknown match_drill error";
+        await markJob(supabaseAdmin, videoId, "match_drill", {
+          status: "failed",
+          error: message,
+          completed_at: new Date().toISOString(),
+        });
+        await supabaseAdmin.from("videos").update({ status: "failed" }).eq("id", videoId);
+        return { status: "failed", videoId, stage: "match_drill", error: message };
+      }
     }
 
     await markJob(supabaseAdmin, videoId, "match_drill", {

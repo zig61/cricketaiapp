@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { MEDIUM_CONFIDENCE_CAVEAT } from "./confidence.js";
+import { UNVALIDATED_RANGE_MARKERS } from "../pipeline/diagnose.js";
 
 const EXPLANATION_MODEL = "claude-sonnet-5";
 
@@ -11,11 +12,27 @@ const explanationSchema = z.object({
   correction: z.string().min(1),
 });
 
+const neutralObservationSchema = z.object({
+  observation: z.string().min(1),
+});
+
 const MARKER_DESCRIPTIONS: Record<string, string> = {
   head_stability:
     "head_stability — how far the player's head drifts sideways away from the ball line during the shot, in centimeters.",
   balance_weight_transfer:
     "balance_weight_transfer — how far the player's hips move toward their front foot during the shot, as a percentage of their own stance width (0% = no transfer at all, 100% = hips reached the front foot's line, more than 100% means the hips moved PAST the front foot — overbalanced, a loss of control in the other direction from insufficient transfer).",
+};
+
+// Deliberately different wording from MARKER_DESCRIPTIONS above: that
+// version already frames the measurement in verdict terms ("drifts sideways
+// AWAY from the ball line") — appropriate for the normal diagnosis path,
+// wrong for UNVALIDATED_RANGE_MARKERS, which must describe only what's
+// measured, not which direction is bad.
+const NEUTRAL_MARKER_DESCRIPTIONS: Record<string, string> = {
+  head_stability:
+    "head_stability — how far the player's head moves relative to their hips during the shot, isolated from the forward movement expected from correct weight transfer, in centimeters.",
+  balance_weight_transfer:
+    "balance_weight_transfer — how far the player's hips move toward their front foot during the shot, as a percentage of their own stance width.",
 };
 
 const MARKER_KEY_TO_PLAIN_TERM: Record<string, string> = {
@@ -105,6 +122,35 @@ Return exactly four fields via the tool call, in this order:
 Do not add drills, success criteria, or any section beyond these four — those are handled elsewhere in the product.`;
 }
 
+/**
+ * For UNVALIDATED_RANGE_MARKERS only (see diagnose.ts): report the
+ * measurement plainly, with no verdict, cause, consequence, correction, or
+ * drill — the reference range this marker would be judged against isn't
+ * validated yet (2026-09-09), so there's nothing trustworthy to build a
+ * diagnosis on top of. Root cause and severity are deliberately never
+ * passed to the model here — doing so would invite exactly the
+ * cause/consequence framing this path exists to avoid.
+ */
+function buildNeutralSystemPrompt(markerKey: string): string {
+  const description = NEUTRAL_MARKER_DESCRIPTIONS[markerKey] ?? markerKey;
+
+  return `You are a batting coach reporting a real measurement from a player's video directly to them.
+
+This measurement's reference range has NOT been validated against real coaching or biomechanics data yet — we trust the number itself (it's measured directly from the video), but we do not yet know what value counts as good or bad for this specific metric. Your job is to report the measurement plainly and factually, in a confident, informative tone — WITHOUT framing it as a problem, fault, issue, or anything needing correction.
+
+The measurement is ${description}
+
+STRICT RULES:
+- State the measured number and what it represents, plainly and with full confidence in the number itself.
+- Do NOT use words like "problem", "issue", "fault", "wrong", "poor", "concern", or similar judgment language.
+- Do NOT claim or imply the value is outside a healthy/stable/normal range, or pass any verdict on it either way.
+- Do NOT suggest a correction, drill, technique fix, or next step.
+- Do NOT mention severity, root cause, or consequences for batting performance — none of that is validated for this metric yet.
+- Age band, batting hand, and playing level (when given) may only calibrate tone/language, never the substance.
+
+Return exactly one field via the tool call: "observation" — 1-2 sentences, reporting the number and what it measures, in a neutral, informative tone. Nothing else.`;
+}
+
 export interface SecondaryMeasurementContext {
   markerKey: string;
   value: number;
@@ -147,6 +193,18 @@ function fallbackExplanation(input: ExplainInput): string {
   );
 }
 
+/**
+ * Fallback for UNVALIDATED_RANGE_MARKERS when the Claude call fails —
+ * same neutral, no-verdict framing as buildNeutralSystemPrompt, since a
+ * template fallback shouldn't say anything the model itself was told not
+ * to say. Deliberately doesn't mention "outside the typical range of..."
+ * the way fallbackExplanation does — that phrasing itself implies a
+ * verdict against a range that isn't validated.
+ */
+function neutralFallbackExplanation(input: ExplainInput): string {
+  return `${input.markerKey.replace(/_/g, " ")} measured at ${input.value}${input.unit}.`;
+}
+
 function composeExplanation(parsed: z.infer<typeof explanationSchema>): string {
   return [parsed.observation, parsed.cause, parsed.consequence, parsed.correction].join(" ");
 }
@@ -164,6 +222,19 @@ function applyConfidenceCaveat(text: string, confidenceLevel: ExplainInput["conf
 }
 
 /**
+ * Public entry point — dispatches to whichever of the two explanation
+ * styles below applies. See UNVALIDATED_RANGE_MARKERS (diagnose.ts) for
+ * why the split exists: a marker whose reference range isn't validated
+ * gets a neutral measurement report, never a diagnosed-issue verdict.
+ */
+export async function explainIssue(apiKey: string, input: ExplainInput): Promise<string> {
+  if (UNVALIDATED_RANGE_MARKERS.has(input.markerKey)) {
+    return explainNeutralMeasurement(apiKey, input);
+  }
+  return explainDiagnosedIssue(apiKey, input);
+}
+
+/**
  * Call site A (docs/06-ai-architecture.md §2) — LLM explains, never decides.
  * Every input field is already computed deterministically upstream; the
  * model only turns them into plain-language prose via a schema-constrained
@@ -174,8 +245,14 @@ function applyConfidenceCaveat(text: string, confidenceLevel: ExplainInput["conf
  * malformed output, or the model naming a marker outside this call's scope
  * — falls back to a deterministic template rather than failing the whole
  * pipeline stage or shipping a fabricated claim.
+ *
+ * Exported (alongside explainNeutralMeasurement) so tests can exercise this
+ * path directly with a realistic, well-known marker key, independent of
+ * whether that key happens to be in UNVALIDATED_RANGE_MARKERS today — the
+ * two paths' internal logic is tested separately from explainIssue's
+ * routing decision.
  */
-export async function explainIssue(apiKey: string, input: ExplainInput): Promise<string> {
+export async function explainDiagnosedIssue(apiKey: string, input: ExplainInput): Promise<string> {
   const inScopeKeys = input.secondaryMeasurement
     ? [input.markerKey, input.secondaryMeasurement.markerKey]
     : [input.markerKey];
@@ -280,5 +357,80 @@ export async function explainIssue(apiKey: string, input: ExplainInput): Promise
       causeMessage: cause?.message,
     });
     return applyConfidenceCaveat(fallbackExplanation(input), input.confidenceLevel);
+  }
+}
+
+/**
+ * The UNVALIDATED_RANGE_MARKERS path — see buildNeutralSystemPrompt for
+ * why root cause/severity are never passed to the model, and
+ * neutralFallbackExplanation for why the failure-path template doesn't use
+ * fallbackExplanation's "outside the typical range of..." wording either.
+ * No confidence caveat is applied here even at MEDIUM: the caveat exists to
+ * flag a shaky *verdict*, and this path never states one.
+ */
+export async function explainNeutralMeasurement(apiKey: string, input: ExplainInput): Promise<string> {
+  try {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: EXPLANATION_MODEL,
+      max_tokens: 300,
+      system: buildNeutralSystemPrompt(input.markerKey),
+      messages: [
+        {
+          role: "user",
+          content: JSON.stringify({
+            player: input.player,
+            measurement: {
+              markerKey: input.markerKey,
+              value: input.value,
+              unit: input.unit,
+            },
+            confidence: input.confidence,
+          }),
+        },
+      ],
+      tools: [
+        {
+          name: "report_measurement",
+          description: "Report a single measurement plainly, without a verdict.",
+          input_schema: {
+            type: "object",
+            properties: {
+              observation: {
+                type: "string",
+                description: "1-2 sentences, neutral, no verdict.",
+              },
+            },
+            required: ["observation"],
+          },
+        },
+      ],
+      tool_choice: { type: "tool", name: "report_measurement" },
+    });
+
+    const toolUse = response.content.find(
+      (block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+    );
+    if (!toolUse) {
+      throw new Error("No tool_use block in Claude's response.");
+    }
+
+    const parsed = neutralObservationSchema.parse(toolUse.input);
+
+    if (containsOutOfScopeClaim(parsed.observation, [input.markerKey])) {
+      throw new Error("Model output referenced a marker outside this call's scope; discarding in favor of fallback.");
+    }
+
+    return parsed.observation;
+  } catch (err) {
+    const cause = err instanceof Error ? (err.cause as Error | undefined) : undefined;
+    console.error("explainNeutralMeasurement: falling back to template.", {
+      name: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      causeName: cause?.name,
+      causeCode: (cause as { code?: string } | undefined)?.code,
+      causeMessage: cause?.message,
+    });
+    return neutralFallbackExplanation(input);
   }
 }

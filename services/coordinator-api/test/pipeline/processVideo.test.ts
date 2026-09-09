@@ -419,4 +419,65 @@ describe("processVideo", () => {
 
     expect(result).toMatchObject({ status: "processed", primaryIssueId: null });
   });
+
+  it("does not prescribe a drill when the primary issue's marker is in UNVALIDATED_RANGE_MARKERS", async () => {
+    // Same setup as "writes both measurements and selects head_stability as
+    // primary..." above -- head_stability legitimately becomes the primary
+    // issue (2026-09-09: still true, severity is still computed/stored
+    // internally) -- but with UNVALIDATED_RANGE_MARKERS in place, no drill
+    // should be prescribed for it, since head_stability's reference range
+    // isn't validated (diagnose.ts).
+    let videoFromCalls = 0;
+    let drillPrescriptionInsertCalled = false;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: "13_17", batting_hand: "right", playing_level: "junior_club" } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") return queryResult({ data: { id: "measurement-1" } });
+      if (table === "root_causes") {
+        return queryResult({ data: { id: "root-cause-head", description: "Head drifts sideways." } });
+      }
+      if (table === "issues") return queryResult({ data: { id: "issue-1" } });
+      if (table === "drill_root_causes") return queryResult({ data: { drill_id: "drill-1" } });
+      if (table === "drill_prescriptions") {
+        return {
+          ...queryResult({ data: null }),
+          insert: () => {
+            drillPrescriptionInsertCalled = true;
+            return queryResult({ data: null });
+          },
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          battingResponse({
+            headStability: { value: 30.65, confidence: 0.999 },
+            weightTransfer: { value: 40, confidence: 0.95 },
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const result = await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    expect(result).toMatchObject({ status: "processed", primaryIssueId: "issue-1" });
+    expect(drillPrescriptionInsertCalled).toBe(false);
+  });
 });

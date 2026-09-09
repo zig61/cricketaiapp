@@ -8,8 +8,20 @@ vi.mock("@anthropic-ai/sdk", () => ({
   })),
 }));
 
-const { explainIssue } = await import("../../src/lib/explain.js");
+const { explainIssue, explainDiagnosedIssue, explainNeutralMeasurement } = await import(
+  "../../src/lib/explain.js"
+);
 
+// head_stability and balance_weight_transfer are both in
+// UNVALIDATED_RANGE_MARKERS (diagnose.ts) as of 2026-09-09 -- explainIssue
+// now routes them to the neutral-measurement path, not the diagnosed-issue
+// path these fixtures originally exercised. The diagnosed-issue tests below
+// call explainDiagnosedIssue directly (bypassing explainIssue's routing) so
+// they keep testing that path's real, unchanged logic against realistic,
+// well-known marker keys -- the maps these fixtures need (MARKER_DESCRIPTIONS,
+// MARKER_KEY_TO_PLAIN_TERM) only have entries for these two markers, so
+// reusing them here (rather than a synthetic key) is what makes the
+// out-of-scope guard behave realistically in those tests.
 const HEAD_STABILITY_INPUT = {
   rootCauseKey: "head_falling_away",
   rootCauseDescription: "Head drifts sideways away from the ball line.",
@@ -40,7 +52,7 @@ function toolResponse(input: Record<string, string>) {
   return { content: [{ type: "tool_use", input }] };
 }
 
-describe("explainIssue", () => {
+describe("explainDiagnosedIssue (the full observation/cause/consequence/correction path)", () => {
   beforeEach(() => {
     mockCreate.mockReset();
   });
@@ -55,7 +67,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    const text = await explainIssue("test-key", HEAD_STABILITY_INPUT);
+    const text = await explainDiagnosedIssue("test-key", HEAD_STABILITY_INPUT);
 
     expect(text).toBe(
       "Your head drifted noticeably during the shot. You're losing your head position before your front foot settles. This makes your contact point inconsistent and costs you control through the off side. Keep your head still until the bat meets the ball.",
@@ -72,7 +84,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    const text = await explainIssue("test-key", HEAD_STABILITY_INPUT);
+    const text = await explainDiagnosedIssue("test-key", HEAD_STABILITY_INPUT);
 
     expect(text).toContain("head stability was measured at 16.55cm");
     expect(text).not.toContain("grip");
@@ -89,7 +101,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    const text = await explainIssue("test-key", WEIGHT_TRANSFER_INPUT);
+    const text = await explainDiagnosedIssue("test-key", WEIGHT_TRANSFER_INPUT);
 
     expect(text).toContain("weight");
     expect(mockCreate).toHaveBeenCalled();
@@ -105,7 +117,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    const text = await explainIssue("test-key", WEIGHT_TRANSFER_INPUT);
+    const text = await explainDiagnosedIssue("test-key", WEIGHT_TRANSFER_INPUT);
 
     expect(text).toContain("balance weight transfer was measured at 30percent_of_base_width");
     expect(text).not.toContain("grip");
@@ -121,7 +133,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    const text = await explainIssue("test-key", {
+    const text = await explainDiagnosedIssue("test-key", {
       ...HEAD_STABILITY_INPUT,
       secondaryMeasurement: {
         markerKey: "balance_weight_transfer",
@@ -150,7 +162,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    await explainIssue("test-key", HEAD_STABILITY_INPUT);
+    await explainDiagnosedIssue("test-key", HEAD_STABILITY_INPUT);
 
     const promptArg = mockCreate.mock.calls[0]?.[0];
     if (!promptArg) throw new Error("mockCreate was not called");
@@ -161,7 +173,7 @@ describe("explainIssue", () => {
   it("falls back to the deterministic template when no tool_use block is returned", async () => {
     mockCreate.mockResolvedValue({ content: [{ type: "text", text: "not a tool call" }] });
 
-    const text = await explainIssue("test-key", HEAD_STABILITY_INPUT);
+    const text = await explainDiagnosedIssue("test-key", HEAD_STABILITY_INPUT);
 
     expect(text).toContain("outside the typical range of 0-5cm");
   });
@@ -169,7 +181,7 @@ describe("explainIssue", () => {
   it("falls back to the deterministic template when the API call throws", async () => {
     mockCreate.mockRejectedValue(new Error("network error"));
 
-    const text = await explainIssue("test-key", HEAD_STABILITY_INPUT);
+    const text = await explainDiagnosedIssue("test-key", HEAD_STABILITY_INPUT);
 
     expect(text).toContain(HEAD_STABILITY_INPUT.rootCauseDescription);
   });
@@ -188,7 +200,7 @@ describe("explainIssue", () => {
       }),
     );
 
-    const text = await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "medium" });
+    const text = await explainDiagnosedIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "medium" });
 
     expect(text).toContain("Keep your head still until the bat meets the ball.");
     expect(text).toContain("moderate confidence");
@@ -197,7 +209,7 @@ describe("explainIssue", () => {
   it("appends the deterministic MEDIUM caveat to the fallback template too", async () => {
     mockCreate.mockRejectedValue(new Error("network error"));
 
-    const text = await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "medium" });
+    const text = await explainDiagnosedIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "medium" });
 
     expect(text).toContain(HEAD_STABILITY_INPUT.rootCauseDescription);
     expect(text).toContain("moderate confidence");
@@ -206,8 +218,132 @@ describe("explainIssue", () => {
   it("does not append any caveat for a HIGH-confidence result", async () => {
     mockCreate.mockRejectedValue(new Error("network error"));
 
-    const text = await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "high" });
+    const text = await explainDiagnosedIssue("test-key", { ...HEAD_STABILITY_INPUT, confidenceLevel: "high" });
 
     expect(text).not.toContain("moderate confidence");
+  });
+});
+
+// --- explainNeutralMeasurement: UNVALIDATED_RANGE_MARKERS' path (2026-09-09) ---
+// head_stability and balance_weight_transfer's reference ranges aren't
+// validated (no citation supports either; the one real study found
+// contradicts HEAD_STABILITY_REFERENCE_RANGE's assumed direction). This
+// path reports the measurement plainly -- no verdict, cause, consequence,
+// correction, or drill.
+
+describe("explainNeutralMeasurement", () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it("reports the measurement plainly from a valid tool_use response, with nothing else", async () => {
+    mockCreate.mockResolvedValue(
+      toolResponse({
+        observation:
+          "Head stability measured at 14.3 cm, reflecting how much the head moves relative to the hips during the shot.",
+      }),
+    );
+
+    const text = await explainNeutralMeasurement("test-key", { ...HEAD_STABILITY_INPUT, value: 14.3 });
+
+    expect(text).toBe(
+      "Head stability measured at 14.3 cm, reflecting how much the head moves relative to the hips during the shot.",
+    );
+  });
+
+  it("calls the report_measurement tool, not explain_issue", async () => {
+    mockCreate.mockResolvedValue(toolResponse({ observation: "obs" }));
+
+    await explainNeutralMeasurement("test-key", HEAD_STABILITY_INPUT);
+
+    const promptArg = mockCreate.mock.calls[0]?.[0];
+    if (!promptArg) throw new Error("mockCreate was not called");
+    expect(promptArg.tools[0].name).toBe("report_measurement");
+  });
+
+  it("never sends rootCause or severity to the model -- nothing to build a verdict on", async () => {
+    mockCreate.mockResolvedValue(toolResponse({ observation: "obs" }));
+
+    await explainNeutralMeasurement("test-key", HEAD_STABILITY_INPUT);
+
+    const promptArg = mockCreate.mock.calls[0]?.[0];
+    if (!promptArg) throw new Error("mockCreate was not called");
+    const userContent = JSON.parse(promptArg.messages[0].content);
+    expect(userContent.rootCause).toBeUndefined();
+    expect(userContent.severity).toBeUndefined();
+  });
+
+  it("falls back to the neutral template (no 'outside the typical range' wording) when the API call throws", async () => {
+    mockCreate.mockRejectedValue(new Error("network error"));
+
+    const text = await explainNeutralMeasurement("test-key", HEAD_STABILITY_INPUT);
+
+    expect(text).toBe("head stability measured at 16.55cm.");
+    expect(text).not.toContain("outside the typical range");
+    expect(text).not.toContain(HEAD_STABILITY_INPUT.rootCauseDescription);
+  });
+
+  it("falls back to the neutral template when the model strays out of scope", async () => {
+    mockCreate.mockResolvedValue(
+      toolResponse({ observation: "Your weight transfer also looked shaky here." }),
+    );
+
+    const text = await explainNeutralMeasurement("test-key", HEAD_STABILITY_INPUT);
+
+    expect(text).toBe("head stability measured at 16.55cm.");
+  });
+
+  it("never appends the MEDIUM confidence caveat -- there is no verdict to caveat", async () => {
+    mockCreate.mockResolvedValue(toolResponse({ observation: "Head stability measured at 16.55cm." }));
+
+    const text = await explainNeutralMeasurement("test-key", {
+      ...HEAD_STABILITY_INPUT,
+      confidenceLevel: "medium",
+    });
+
+    expect(text).not.toContain("moderate confidence");
+  });
+});
+
+// --- explainIssue: routes by UNVALIDATED_RANGE_MARKERS membership ---
+
+describe("explainIssue routing", () => {
+  beforeEach(() => {
+    mockCreate.mockReset();
+  });
+
+  it("routes head_stability (an UNVALIDATED_RANGE_MARKERS member) to the neutral-measurement path", async () => {
+    mockCreate.mockResolvedValue(toolResponse({ observation: "Head stability measured at 16.55cm." }));
+
+    await explainIssue("test-key", HEAD_STABILITY_INPUT);
+
+    const promptArg = mockCreate.mock.calls[0]?.[0];
+    if (!promptArg) throw new Error("mockCreate was not called");
+    expect(promptArg.tools[0].name).toBe("report_measurement");
+  });
+
+  it("routes balance_weight_transfer (an UNVALIDATED_RANGE_MARKERS member) to the neutral-measurement path", async () => {
+    mockCreate.mockResolvedValue(toolResponse({ observation: "Weight transfer measured at 30%." }));
+
+    await explainIssue("test-key", WEIGHT_TRANSFER_INPUT);
+
+    const promptArg = mockCreate.mock.calls[0]?.[0];
+    if (!promptArg) throw new Error("mockCreate was not called");
+    expect(promptArg.tools[0].name).toBe("report_measurement");
+  });
+
+  it("routes a marker outside UNVALIDATED_RANGE_MARKERS to the full diagnosed-issue path", async () => {
+    // No such marker exists in the product yet -- this only proves the
+    // routing decision itself is correct, independent of whether a real
+    // validated-range marker exists to test end-to-end.
+    mockCreate.mockResolvedValue(
+      toolResponse({ observation: "o", cause: "c", consequence: "q", correction: "r" }),
+    );
+
+    await explainIssue("test-key", { ...HEAD_STABILITY_INPUT, markerKey: "front_elbow_height" });
+
+    const promptArg = mockCreate.mock.calls[0]?.[0];
+    if (!promptArg) throw new Error("mockCreate was not called");
+    expect(promptArg.tools[0].name).toBe("explain_issue");
   });
 });

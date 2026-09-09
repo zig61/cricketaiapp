@@ -26,6 +26,23 @@ export const WEIGHT_TRANSFER_SEVERITY_SCALE = 40;
 
 export const CANDIDATE_CONFIDENCE_FLOOR = 0.5;
 export const PRIMARY_CONFIDENCE_FLOOR = 0.6;
+
+/**
+ * Both markers' reference ranges are engineering placeholders, not
+ * validated against coaching or biomechanics data (see the comments on
+ * HEAD_STABILITY_REFERENCE_RANGE / WEIGHT_TRANSFER_REFERENCE_RANGE above,
+ * and the 2026-09-09 literature review: no citation supports either range,
+ * and the one real study found — Taliep, Galal & Vaughan 2007 — directly
+ * contradicts HEAD_STABILITY_REFERENCE_RANGE's assumed direction, showing
+ * *more* forward head movement correlates with skill, not less). Until
+ * these ranges are validated, explain.ts reports the measurement plainly
+ * for markers in this set instead of framing it as a diagnosed problem,
+ * and processVideo.ts skips drill prescription for them. Severity/priority
+ * are still computed for these markers (needed for candidate selection),
+ * just never surfaced to the player as a verdict. A future marker with a
+ * validated range is simply never added here.
+ */
+export const UNVALIDATED_RANGE_MARKERS = new Set(["head_stability", "balance_weight_transfer"]);
 const COACHABILITY_WEIGHT = 1.0;
 
 interface MarkerConfig {
