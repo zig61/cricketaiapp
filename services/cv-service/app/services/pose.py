@@ -44,6 +44,23 @@ MAX_SAMPLED_FRAMES = 90
 BASELINE_FRACTION = 0.1  # first 10% of valid frames define the stance baseline
 LANDMARK_MIN_SCORE = 0.5
 
+# Real bug found live (2026-09-09): a phone held in portrait records a
+# landscape frame buffer plus a rotation flag telling players to display it
+# rotated -- cv2.VideoCapture.read() returns the raw, UNROTATED buffer and
+# ignores that flag (CAP_PROP_ORIENTATION_AUTO defaults to 0 in this
+# OpenCV build). Every portrait .mov fed to the pose model was therefore
+# sideways: nose/hips (large, easy landmarks) still weakly detected, but
+# geometry scores collapsed to 0 and ankles (smaller landmarks) failed
+# outright on every one of 7 real calibration clips, all carrying the same
+# 90-degree flag. Direction confirmed empirically (extracted a raw frame,
+# rotated it both ways, visually confirmed CLOCKWISE is correct for 90) --
+# not assumed from convention.
+ROTATE_CODE_BY_DEGREES = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
 # Part 3 (confidence gating plan, 2026-09-06): if nothing at all has been
 # detected after this many attempted samples, neither marker is going to
 # work from this video — bail out of the remaining ~75 frames rather than
@@ -120,7 +137,7 @@ class ConfidenceBreakdown:
 
 
 def classify_confidence(score: float) -> str:
-    """"high" / "medium" / "low" — thresholds are a first estimate, see the
+    """ "high" / "medium" / "low" — thresholds are a first estimate, see the
     module-level constants' comment. Deliberately set so "low" (< 0.4)
     falls entirely below the pipeline's existing candidate-confidence floor
     (0.5, in coordinator-api's diagnose.ts) -- a low-confidence measurement
@@ -312,6 +329,10 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
         # read has no such dependency and needs its own explicit frame cap
         # instead (previously implicit in the precomputed list's length).
         step = _sample_step(source_fps)
+        # See ROTATE_CODE_BY_DEGREES above -- portrait phone videos need
+        # this applied per sampled frame or the pose model sees them
+        # sideways.
+        rotate_code = ROTATE_CODE_BY_DEGREES.get(int(cap.get(cv2.CAP_PROP_ORIENTATION_META)))
 
         with vision.PoseLandmarker.create_from_options(options) as landmarker:
             index = 0
@@ -321,6 +342,8 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
                     break
                 if index % step == 0:
                     frame_count += 1
+                    if rotate_code is not None:
+                        frame_bgr = cv2.rotate(frame_bgr, rotate_code)
                     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
                     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
                     timestamp_ms = int((index / (source_fps or 30.0)) * 1000)
@@ -340,9 +363,7 @@ def _run_pose_detection(video_path: str) -> tuple[list[FrameSample], int]:
                                 ),
                                 right_hip_x=lm[RIGHT_HIP].x,
                                 right_hip_visibility=(
-                                    lm[RIGHT_HIP].visibility
-                                    if _landmark_ok(lm[RIGHT_HIP])
-                                    else 0.0
+                                    lm[RIGHT_HIP].visibility if _landmark_ok(lm[RIGHT_HIP]) else 0.0
                                 ),
                                 left_ankle_x=lm[LEFT_ANKLE].x,
                                 left_ankle_visibility=(
@@ -422,10 +443,12 @@ def _compute_head_stability_from_samples(
 
         combined_baseline_count = max(1, round(len(combined) * BASELINE_FRACTION))
         baseline_front_x = (
-            sum(ankle_x(s, front) for s in combined[:combined_baseline_count]) / combined_baseline_count
+            sum(ankle_x(s, front) for s in combined[:combined_baseline_count])
+            / combined_baseline_count
         )
         baseline_back_x = (
-            sum(ankle_x(s, back) for s in combined[:combined_baseline_count]) / combined_baseline_count
+            sum(ankle_x(s, back) for s in combined[:combined_baseline_count])
+            / combined_baseline_count
         )
         base_width = baseline_front_x - baseline_back_x
 
@@ -449,7 +472,8 @@ def _compute_head_stability_from_samples(
         peak_drift_m = max(abs((s.nose_x - s.hip_mid_x) - baseline) for s in valid)
 
     visibility_score = sum(
-        (s.nose_visibility + s.left_hip_visibility + s.right_hip_visibility) / 3 for s in scoring_frames
+        (s.nose_visibility + s.left_hip_visibility + s.right_hip_visibility) / 3
+        for s in scoring_frames
     ) / len(scoring_frames)
     consistency_score = len(valid) / frame_count if frame_count else 0.0
     geometry_score = _head_stability_geometry_score(peak_drift_m, baseline_hip_width)
@@ -530,8 +554,12 @@ def compute_weight_transfer_from_samples(
         return s.left_ankle_visibility if side == "left" else s.right_ankle_visibility
 
     frames_with_hips_ok = sum(1 for s in samples if s.hips_ok)
-    frames_with_front_ankle_ok = sum(1 for s in samples if ankle_visibility(s, front) > LANDMARK_MIN_SCORE)
-    frames_with_back_ankle_ok = sum(1 for s in samples if ankle_visibility(s, back) > LANDMARK_MIN_SCORE)
+    frames_with_front_ankle_ok = sum(
+        1 for s in samples if ankle_visibility(s, front) > LANDMARK_MIN_SCORE
+    )
+    frames_with_back_ankle_ok = sum(
+        1 for s in samples if ankle_visibility(s, back) > LANDMARK_MIN_SCORE
+    )
     mean_front_ankle_visibility = (
         sum(ankle_visibility(s, front) for s in samples) / len(samples) if samples else 0.0
     )
@@ -635,9 +663,7 @@ def compute_weight_transfer(
     return compute_weight_transfer_from_samples(samples, batting_hand, frame_count)
 
 
-def analyze_batting_video(
-    video_path: str, batting_hand: str | None
-) -> BattingAnalysisResult:
+def analyze_batting_video(video_path: str, batting_hand: str | None) -> BattingAnalysisResult:
     """The real entry point the API route calls: runs pose detection once,
     computes head_stability (always — failure here raises, same as before),
     and weight_transfer (only if batting_hand is known and ankles were

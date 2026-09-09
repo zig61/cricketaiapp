@@ -4,15 +4,13 @@ from app.services.pose import (
     CONFIDENCE_HIGH_THRESHOLD,
     FrameSample,
     InsufficientDetectionError,
-    classify_confidence,
-    compute_head_stability,
-    compute_weight_transfer_from_samples,
-)
-from app.services.pose import (
     _compute_head_stability_from_samples,
     _head_stability_geometry_score,
     _linear_residuals,
     _weight_transfer_geometry_score,
+    classify_confidence,
+    compute_head_stability,
+    compute_weight_transfer_from_samples,
 )
 
 
@@ -108,7 +106,9 @@ def test_head_stability_does_not_flag_a_correct_forward_lean_as_drift():
     # near-zero drift and high confidence.
     n = 20
     samples = [
-        _head_frame(hip_x=(i / (n - 1)) * 0.3, nose_x=(i / (n - 1)) * 0.3 + 0.02 + 0.05 * (i / (n - 1)))
+        _head_frame(
+            hip_x=(i / (n - 1)) * 0.3, nose_x=(i / (n - 1)) * 0.3 + 0.02 + 0.05 * (i / (n - 1))
+        )
         for i in range(n)
     ]
 
@@ -148,7 +148,9 @@ def test_head_stability_falls_back_to_raw_drift_without_a_batting_hand():
     # result can't rule out conflating a correct lean with real drift.
     n = 20
     samples = [
-        _head_frame(hip_x=(i / (n - 1)) * 0.3, nose_x=(i / (n - 1)) * 0.3 + 0.02 + 0.05 * (i / (n - 1)))
+        _head_frame(
+            hip_x=(i / (n - 1)) * 0.3, nose_x=(i / (n - 1)) * 0.3 + 0.02 + 0.05 * (i / (n - 1))
+        )
         for i in range(n)
     ]
 
@@ -394,6 +396,58 @@ def test_sampling_does_not_depend_on_the_containers_frame_count(synthetic_video_
     # frame_count > 0 proves frames were actually sampled and attempted --
     # with the bug, this was exactly 0 regardless of the video's real content.
     assert exc_info.value.frame_count > 0
+
+
+def test_applies_a_rotation_correction_when_the_video_carries_a_portrait_flag(
+    synthetic_video_path, monkeypatch
+):
+    # Real bug found live (2026-09-09): a phone-recorded portrait video
+    # carries a rotation flag (CAP_PROP_ORIENTATION_META) that
+    # cv2.VideoCapture.read() ignores -- frames come back sideways unless
+    # corrected explicitly. All 7 real calibration clips tested carried a
+    # 90-degree flag; the correction direction (clockwise) was confirmed
+    # empirically against a real frame, not assumed -- this test only
+    # proves the correction is actually applied when the metadata says to.
+    import cv2
+
+    real_get = cv2.VideoCapture.get
+
+    def fake_get(self, prop_id):
+        if prop_id == cv2.CAP_PROP_ORIENTATION_META:
+            return 90
+        return real_get(self, prop_id)
+
+    monkeypatch.setattr(cv2.VideoCapture, "get", fake_get)
+
+    rotate_calls = []
+    real_rotate = cv2.rotate
+
+    def spy_rotate(frame, code):
+        rotate_calls.append(code)
+        return real_rotate(frame, code)
+
+    monkeypatch.setattr(cv2, "rotate", spy_rotate)
+
+    with pytest.raises(InsufficientDetectionError):
+        compute_head_stability(synthetic_video_path)
+
+    assert rotate_calls
+    assert all(code == cv2.ROTATE_90_CLOCKWISE for code in rotate_calls)
+
+
+def test_does_not_rotate_a_video_with_no_orientation_flag(synthetic_video_path, monkeypatch):
+    import cv2
+
+    rotate_calls = []
+    real_rotate = cv2.rotate
+    monkeypatch.setattr(
+        cv2, "rotate", lambda frame, code: (rotate_calls.append(code), real_rotate(frame, code))[1]
+    )
+
+    with pytest.raises(InsufficientDetectionError):
+        compute_head_stability(synthetic_video_path)
+
+    assert rotate_calls == []
 
 
 # --- classify_confidence: thresholds are a first estimate, see pose.py's comment ---
