@@ -537,6 +537,25 @@ def compute_weight_transfer_from_samples(
     doesn't matter which side of the frame is which, only which named
     landmark (front vs back, from batting_hand) is on which side.
 
+    SCOPE LIMITATION (2026-09-11, not yet enforced): this formula assumes a
+    front-foot shot -- weight moving from the back ankle toward the front
+    ankle. A back-foot shot (pull, cut, hook -- weight staying back or
+    moving further behind the back ankle) is a different biomechanical
+    pattern this hasn't been built or calibrated for at all; fed one, this
+    would likely return a low or negative percentage and score it as a
+    severe "weight transfer incomplete" fault, which would be a
+    confidently wrong reading, not a real diagnosis. All calibration data
+    gathered so far (7 real clips, 2026-09-10) was front-foot shots only
+    (drives) -- verified against each clip's own weight_transfer% (all
+    41-72%, none near-zero or negative, consistent with genuine forward
+    transfer) plus a visual spot-check on the most ambiguous-sounding one.
+    Nothing here can currently tell a front-foot shot apart from a
+    back-foot one before scoring it -- see the coordinator-api PR/thread
+    this comment was added in for the proposed (not yet built) heuristic:
+    a low-or-negative peak weight-transfer% is itself a cheap signal this
+    may not be a front-foot shot at all, using data already computed here,
+    without needing a real shot classifier.
+
     Returns (None, diagnostics) if too few frames have both hips and the
     relevant ankle pair visible — a valid "not enough evidence for this
     marker" outcome, not an error, since head_stability may still have

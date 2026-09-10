@@ -41,6 +41,18 @@ export const PRIMARY_CONFIDENCE_FLOOR = 0.6;
  * are still computed for these markers (needed for candidate selection),
  * just never surfaced to the player as a verdict. A future marker with a
  * validated range is simply never added here.
+ *
+ * SEPARATE, ADDITIONAL scope limitation (2026-09-11, not yet enforced): all
+ * calibration so far — every number either range could eventually be based
+ * on — comes from front-foot shots (drives) only. weight_transfer's formula
+ * (cv-service's compute_weight_transfer_from_samples) explicitly assumes
+ * weight moves from the back ankle toward the front one; a back-foot shot
+ * (pull, cut, hook) is a different pattern entirely and would likely score
+ * as a confident, severe "weight transfer incomplete" fault instead of
+ * being recognized as out of scope. Nothing in the pipeline can currently
+ * tell a front-foot shot apart from a back-foot one before scoring it —
+ * see pose.py's matching comment for the proposed (not yet built) cheap
+ * heuristic using weight_transfer's own peak percentage.
  */
 export const UNVALIDATED_RANGE_MARKERS = new Set(["head_stability", "balance_weight_transfer"]);
 const COACHABILITY_WEIGHT = 1.0;
