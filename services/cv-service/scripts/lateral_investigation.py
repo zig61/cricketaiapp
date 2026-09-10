@@ -177,19 +177,20 @@ def investigate(video_path: str, batting_hand: str = "right") -> dict:
     row["peak_forward_cm"] = round(max(abs(v - baseline_forward) for v in forward_series) * 100, 2)
     row["peak_lateral_cm"] = round(max(abs(v - baseline_lateral) for v in lateral_series) * 100, 2)
 
-    # Z-reliability diagnostic, take 2: an earlier version of this script
-    # compared x-only vs full-x-z VECTOR MAGNITUDE (hypot(dx, dz)) as a
-    # jitter proxy. That's mathematically the wrong test -- a hypotenuse is
-    # only second-order sensitive to noise in a small perpendicular
-    # component (basic vector geometry: jitter perpendicular to a vector
-    # barely moves its magnitude, it moves its DIRECTION), so it
-    # systematically UNDERSTATES z noise. Comparing raw stddev of the
-    # ankle-to-ankle x-difference against the z-difference, during the
-    # baseline (stance) window specifically -- where the true value is
-    # genuinely static, not just slowly varying, since the feet haven't
-    # started moving yet -- is a direct test with no such blind spot.
-    baseline_ankle_x_diff = [ankle_xz(s, front)[0] - ankle_xz(s, back)[0] for s in baseline]
-    baseline_ankle_z_diff = [ankle_xz(s, front)[1] - ankle_xz(s, back)[1] for s in baseline]
+    # Z-reliability diagnostic, take 3: take 2 compared raw stddev of the
+    # ankle x/z-difference during the BASELINE_FRACTION (10%) window,
+    # correctly avoiding take 1's hypotenuse blind spot -- but batch 1
+    # (2026-09-11) showed BASELINE_FRACTION gives just 1-2 frames on
+    # several shorter clips, making that stddev statistically meaningless
+    # (1 frame's "stddev" is 0 by definition). Widened to a fixed floor of
+    # 5 frames -- still the earliest frames in the clip, so still the part
+    # most likely to be genuine static stance, just enough of them to
+    # estimate a variance from. Real production logic (the stance vector
+    # used for the actual forward/lateral split above) is untouched --
+    # this window is only used for this diagnostic.
+    noise_window = combined[: max(baseline_count, min(5, len(combined)))]
+    baseline_ankle_x_diff = [ankle_xz(s, front)[0] - ankle_xz(s, back)[0] for s in noise_window]
+    baseline_ankle_z_diff = [ankle_xz(s, front)[1] - ankle_xz(s, back)[1] for s in noise_window]
 
     def _stddev_cm(values: list[float]) -> float:
         m = _mean(values)
@@ -198,6 +199,12 @@ def investigate(video_path: str, batting_hand: str = "right") -> dict:
     row["baseline_ankle_x_diff_stddev_cm"] = round(_stddev_cm(baseline_ankle_x_diff), 2)
     row["baseline_ankle_z_diff_stddev_cm"] = round(_stddev_cm(baseline_ankle_z_diff), 2)
     row["baseline_ankle_z_diff_mean_cm"] = round(_mean(baseline_ankle_z_diff) * 100, 2)
+    # A real gap found running batch 1 (2026-09-11): BASELINE_FRACTION (10%)
+    # gives just 1-2 frames on several shorter clips, which makes the
+    # stddev above statistically meaningless (a 1-frame "stddev" is 0 by
+    # definition; 2 frames is barely better) -- surfaced explicitly rather
+    # than silently trusting a noise estimate built on too little data.
+    row["baseline_frame_count"] = len(noise_window)
 
     return row
 
@@ -212,6 +219,7 @@ COLUMNS = [
     "baseline_ankle_x_diff_stddev_cm",
     "baseline_ankle_z_diff_stddev_cm",
     "baseline_ankle_z_diff_mean_cm",
+    "baseline_frame_count",
     "error",
 ]
 
