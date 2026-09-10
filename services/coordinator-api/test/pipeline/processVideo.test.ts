@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { queryResult, mockSupabaseAdmin, type MockSupabaseAdmin } from "../helpers/mockSupabaseAdmin.js";
 import { AppError } from "../../src/lib/errors.js";
+import { FRONT_FOOT_SHOT_SCOPE_NOTE } from "../../src/lib/confidence.js";
+import { FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT } from "../../src/pipeline/diagnose.js";
 
 vi.mock("@anthropic-ai/sdk", () => ({
   default: vi.fn().mockImplementation(() => ({
@@ -479,5 +481,203 @@ describe("processVideo", () => {
 
     expect(result).toMatchObject({ status: "processed", primaryIssueId: "issue-1" });
     expect(drillPrescriptionInsertCalled).toBe(false);
+  });
+
+  // --- front-foot-shot scope gate (2026-09-11): a reasoned placeholder
+  // threshold (25%), not yet validated against real back-foot footage --
+  // see FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT's comment in diagnose.ts.
+
+  it("forces both markers to LOW with the shared scope note when weight_transfer% is below the threshold", async () => {
+    const measurementInserts: Array<Record<string, unknown>> = [];
+    let videoFromCalls = 0;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: null, batting_hand: "right", playing_level: null } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") {
+        return {
+          select: () => ({ single: () => Promise.resolve({ error: null, data: { id: "measurement-1" } }) }),
+          insert: (payload: Record<string, unknown>) => {
+            measurementInserts.push(payload);
+            return {
+              select: () => ({
+                single: () => Promise.resolve({ error: null, data: { id: "measurement-1" } }),
+              }),
+            };
+          },
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    // A confidently-HIGH head_stability reading and an out-of-range
+    // weight_transfer value would normally both clear the candidate floor
+    // easily -- the point of this test is confirming the gate suppresses
+    // that entirely, not just relabels it.
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          battingResponse({
+            headStability: { value: 30.65, confidence: 0.999 },
+            weightTransfer: { value: 15, confidence: 0.95 },
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const result = await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    const headStabilityInsert = measurementInserts.find((i) => i.marker_key === "head_stability");
+    const weightTransferInsert = measurementInserts.find((i) => i.marker_key === "balance_weight_transfer");
+
+    expect(headStabilityInsert).toMatchObject({ confidence: 0, confidence_note: FRONT_FOOT_SHOT_SCOPE_NOTE });
+    expect(weightTransferInsert).toMatchObject({ confidence: 0, confidence_note: FRONT_FOOT_SHOT_SCOPE_NOTE });
+    expect(result).toMatchObject({ status: "processed", primaryIssueId: null });
+  });
+
+  it("does not trip the gate at the lowest real confirmed front-foot value (41.53%)", async () => {
+    let videoFromCalls = 0;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: null, batting_hand: "right", playing_level: null } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") return queryResult({ data: { id: "measurement-1" } });
+      if (table === "root_causes") {
+        return queryResult({ data: { id: "root-cause-wt", description: "Weight stays back." } });
+      }
+      if (table === "issues") return queryResult({ data: { id: "issue-wt" } });
+      if (table === "drill_root_causes") return queryResult({ data: { drill_id: "drill-wt" } });
+      if (table === "drill_prescriptions") return queryResult({ data: null });
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          battingResponse({
+            headStability: { value: 2, confidence: 0.9 },
+            weightTransfer: { value: 41.53, confidence: 0.973 },
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const result = await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    // weight_transfer is out of its own [55,100] reference range at 41.53%,
+    // so it legitimately becomes the primary candidate here -- the gate
+    // staying out of the way is what's under test, not this specific value.
+    expect(result).toMatchObject({ status: "processed", primaryIssueId: "issue-wt" });
+  });
+
+  it("does not trip the gate when weight_transfer is null (an unrelated, already-handled failure mode)", async () => {
+    let videoFromCalls = 0;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: null, batting_hand: null, playing_level: null } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") return queryResult({ data: { id: "measurement-1" } });
+      if (table === "root_causes") {
+        return queryResult({ data: { id: "root-cause-head", description: "Head drifts sideways." } });
+      }
+      if (table === "issues") return queryResult({ data: { id: "issue-head" } });
+      if (table === "drill_root_causes") return queryResult({ data: { drill_id: "drill-head" } });
+      if (table === "drill_prescriptions") return queryResult({ data: null });
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(battingResponse({ headStability: { value: 30.65, confidence: 0.999 }, weightTransfer: null })),
+        { status: 200 },
+      ),
+    );
+
+    const result = await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    expect(result).toMatchObject({ status: "processed", primaryIssueId: "issue-head" });
+  });
+
+  it("threshold boundary is inclusive: exactly the threshold value does not trip the gate", async () => {
+    let videoFromCalls = 0;
+    admin.from.mockImplementation((table: string) => {
+      if (table === "videos") {
+        videoFromCalls += 1;
+        if (videoFromCalls === 1) return queryResult({ data: mockVideoRow() });
+        return queryResult({ data: null });
+      }
+      if (table === "profiles") {
+        return queryResult({ data: { age_band: null, batting_hand: "right", playing_level: null } });
+      }
+      if (table === "processing_jobs") return queryResult({ data: null });
+      if (table === "analyses") return queryResult({ data: { id: "analysis-1" } });
+      if (table === "measurements") return queryResult({ data: { id: "measurement-1" } });
+      if (table === "root_causes") {
+        return queryResult({ data: { id: "root-cause-head", description: "Head drifts sideways." } });
+      }
+      if (table === "issues") return queryResult({ data: { id: "issue-head" } });
+      if (table === "drill_root_causes") return queryResult({ data: { drill_id: "drill-head" } });
+      if (table === "drill_prescriptions") return queryResult({ data: null });
+      throw new Error(`unexpected table ${table}`);
+    });
+    admin.storage.from.mockReturnValue({
+      createSignedUrl: vi.fn().mockResolvedValue({
+        data: { signedUrl: "https://storage.example.com/signed" },
+        error: null,
+      }),
+    });
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          battingResponse({
+            headStability: { value: 30.65, confidence: 0.999 },
+            weightTransfer: { value: FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT, confidence: 0.9 },
+          }),
+        ),
+        { status: 200 },
+      ),
+    );
+
+    const result = await processVideo({ supabaseAdmin: admin as never, ...DEPS_BASE }, "video-1");
+
+    expect(result).toMatchObject({ status: "processed", primaryIssueId: "issue-head" });
   });
 });

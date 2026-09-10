@@ -42,19 +42,46 @@ export const PRIMARY_CONFIDENCE_FLOOR = 0.6;
  * just never surfaced to the player as a verdict. A future marker with a
  * validated range is simply never added here.
  *
- * SEPARATE, ADDITIONAL scope limitation (2026-09-11, not yet enforced): all
- * calibration so far — every number either range could eventually be based
- * on — comes from front-foot shots (drives) only. weight_transfer's formula
+ * SEPARATE, ADDITIONAL scope limitation (2026-09-11): all calibration so
+ * far — every number either range could eventually be based on — comes
+ * from front-foot shots (drives) only. weight_transfer's formula
  * (cv-service's compute_weight_transfer_from_samples) explicitly assumes
  * weight moves from the back ankle toward the front one; a back-foot shot
- * (pull, cut, hook) is a different pattern entirely and would likely score
- * as a confident, severe "weight transfer incomplete" fault instead of
- * being recognized as out of scope. Nothing in the pipeline can currently
- * tell a front-foot shot apart from a back-foot one before scoring it —
- * see pose.py's matching comment for the proposed (not yet built) cheap
- * heuristic using weight_transfer's own peak percentage.
+ * (pull, cut, hook) is a different pattern entirely and would otherwise
+ * score as a confident, severe "weight transfer incomplete" fault instead
+ * of being recognized as out of scope. See
+ * FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT below for the gate that
+ * catches this, and pose.py's matching comment.
  */
 export const UNVALIDATED_RANGE_MARKERS = new Set(["head_stability", "balance_weight_transfer"]);
+
+/**
+ * Heuristic proxy for "does this look like the front-foot shot type
+ * everything here was calibrated on" — NOT real shot detection or
+ * classification. weight_transfer's own peak percentage is the only
+ * already-computed signal available: a front-foot shot pushes the hips
+ * toward the front foot (all 7 confirmed real front-foot clips, 2026-09-10,
+ * scored 41.53-72.46%), while a genuine back-foot shot (pull, cut, hook)
+ * should leave the hips at or behind the back-foot line -- near zero or
+ * negative -- since weight never commits forward the same way.
+ *
+ * 25 is chosen to sit comfortably below the lowest real front-foot value
+ * observed (41.53%, ~1.66x margin) while staying meaningfully above 0%,
+ * so it isn't only catching "no movement at all". THIS IS A REASONED
+ * PLACEHOLDER, NOT A VALIDATED CUTOFF: zero real back-foot clips have been
+ * tested against it yet. Do not treat this as confirmed until a real
+ * back-foot batch (pending, 2026-09-11) has been run through it the same
+ * way head_stability/weight_transfer were validated against real footage
+ * -- not synthetic tests, not reasoning alone.
+ *
+ * Known, accepted failure mode: a very restrained front-foot shot (e.g. a
+ * defensive push with minimal transfer) could also read below this and
+ * get incorrectly gated. That's judged an acceptable direction to fail in
+ * (erring toward "not confident" rather than a confidently wrong answer),
+ * not something silently swept under the rug -- flagged here explicitly
+ * per that judgment call.
+ */
+export const FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT = 25;
 const COACHABILITY_WEIGHT = 1.0;
 
 interface MarkerConfig {

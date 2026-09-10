@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { weakestComponent, lowConfidenceNote, MEDIUM_CONFIDENCE_CAVEAT } from "../../src/lib/confidence.js";
+import {
+  weakestComponent,
+  lowConfidenceNote,
+  MEDIUM_CONFIDENCE_CAVEAT,
+  FRONT_FOOT_SHOT_SCOPE_NOTE,
+} from "../../src/lib/confidence.js";
 import type { ConfidenceBreakdown } from "../../src/lib/cvService.js";
 
 function breakdown(overrides: Partial<ConfidenceBreakdown> = {}): ConfidenceBreakdown {
@@ -86,5 +91,13 @@ describe("MEDIUM_CONFIDENCE_CAVEAT", () => {
   it("is a non-empty, player-facing sentence", () => {
     expect(MEDIUM_CONFIDENCE_CAVEAT.length).toBeGreaterThan(20);
     expect(MEDIUM_CONFIDENCE_CAVEAT.toLowerCase()).toContain("confidence");
+  });
+});
+
+describe("FRONT_FOOT_SHOT_SCOPE_NOTE", () => {
+  it("is a non-empty, player-facing sentence naming both shot types", () => {
+    expect(FRONT_FOOT_SHOT_SCOPE_NOTE.length).toBeGreaterThan(20);
+    expect(FRONT_FOOT_SHOT_SCOPE_NOTE.toLowerCase()).toContain("front-foot");
+    expect(FRONT_FOOT_SHOT_SCOPE_NOTE.toLowerCase()).toContain("back-foot");
   });
 });

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requestBattingMeasurements, CvServiceError, type Measurement } from "../lib/cvService.js";
 import { explainIssue, type SecondaryMeasurementContext } from "../lib/explain.js";
-import { lowConfidenceNote } from "../lib/confidence.js";
+import { lowConfidenceNote, FRONT_FOOT_SHOT_SCOPE_NOTE } from "../lib/confidence.js";
 import { notFound } from "../lib/errors.js";
 import { markJob } from "./markJob.js";
 import {
@@ -11,6 +11,7 @@ import {
   lookupRootCause,
   referenceRangeFor,
   UNVALIDATED_RANGE_MARKERS,
+  FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT,
   type Candidate,
 } from "./diagnose.js";
 import { matchDrill } from "./matchDrill.js";
@@ -193,6 +194,15 @@ export async function processVideo(
     measurementsToWrite.push({ markerKey: "balance_weight_transfer", measurement: result.weightTransfer });
   }
 
+  // Front-foot-shot scope gate (see FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT,
+  // diagnose.ts): weight_transfer is null whenever ankles weren't reliably
+  // detected at all -- an unrelated, already-handled failure mode with no
+  // shot-type signal either way, so this only ever suppresses confidence
+  // when there's an actual low/negative percentage to suppress it for.
+  const looksLikeFrontFootShot =
+    result.weightTransfer === null ||
+    result.weightTransfer.value >= FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT;
+
   const candidates: Candidate[] = [];
   // Tracked alongside candidates so explain() can be told the primary
   // issue's confidence level (for the deterministic MEDIUM caveat) without
@@ -200,7 +210,14 @@ export async function processVideo(
   const confidenceLevelByMarker = new Map<string, "high" | "medium" | "low">();
 
   for (const { markerKey, measurement } of measurementsToWrite) {
-    const level = measurement.confidenceBreakdown.level;
+    // When the scope gate trips, both markers are forced to LOW -- not just
+    // relabeled, but the stored confidence itself is zeroed -- so the
+    // existing CANDIDATE_CONFIDENCE_FLOOR check below excludes them from
+    // ever becoming a diagnose candidate, the same mechanism a genuine
+    // LOW-confidence reading already relies on. No separate gating logic
+    // needed elsewhere in the pipeline.
+    const level = looksLikeFrontFootShot ? measurement.confidenceBreakdown.level : "low";
+    const effectiveConfidence = looksLikeFrontFootShot ? measurement.confidence : 0;
     confidenceLevelByMarker.set(markerKey, level);
 
     const { data: measurementRow, error: measurementError } = await supabaseAdmin
@@ -210,14 +227,17 @@ export async function processVideo(
         marker_key: markerKey,
         value: measurement.value,
         unit: measurement.unit,
-        confidence: measurement.confidence,
+        confidence: effectiveConfidence,
         // Deterministic, non-LLM -- a LOW-confidence result is already
         // known unreliable, so there's no severity/explanation for it to
         // attach to (see evaluateCandidate below); this is the only place
         // the player learns *why*, applied regardless of whether the raw
         // value happened to look like an issue or look fine.
-        confidence_note:
-          level === "low" ? lowConfidenceNote(markerKey, measurement.confidenceBreakdown) : null,
+        confidence_note: !looksLikeFrontFootShot
+          ? FRONT_FOOT_SHOT_SCOPE_NOTE
+          : level === "low"
+            ? lowConfidenceNote(markerKey, measurement.confidenceBreakdown)
+            : null,
       })
       .select("id")
       .single();
@@ -238,7 +258,7 @@ export async function processVideo(
       markerKey,
       value: measurement.value,
       unit: measurement.unit,
-      confidence: measurement.confidence,
+      confidence: effectiveConfidence,
     });
     if (candidate) candidates.push(candidate);
   }

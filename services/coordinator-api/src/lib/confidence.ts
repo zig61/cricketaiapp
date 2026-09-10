@@ -67,3 +67,13 @@ export function lowConfidenceNote(markerKey: string, breakdown: ConfidenceBreakd
  */
 export const MEDIUM_CONFIDENCE_CAVEAT =
   "This reading has moderate confidence, likely due to camera angle or tracking during the clip — treat it as directional rather than exact.";
+
+/**
+ * The front-foot-shot scope gate's note (see
+ * FRONT_FOOT_SHOT_MIN_WEIGHT_TRANSFER_PERCENT, diagnose.ts) — shared
+ * across both markers deliberately, unlike lowConfidenceNote's per-marker
+ * messages, since the underlying reason (this doesn't look like the shot
+ * type everything here was calibrated on) is identical for both.
+ */
+export const FRONT_FOOT_SHOT_SCOPE_NOTE =
+  "This shot doesn't look like a front-foot shot — our current analysis is calibrated for front-foot shots like drives, not back-foot shots like pulls or cuts, so we can't give a reliable read here yet.";
